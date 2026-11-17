@@ -18,6 +18,8 @@ re-importing it. There is no Git on the tablet, so keep the project self-contain
 - `scripts/field.gd`: draws the park. `scripts/hud.gd`: base/out diamond and strike zone panel.
 - `scripts/touch_controls.gd`: floating joystick on the left half, A and B buttons on the right (same as Hoops).
 - `assets/`: Kenney Sports Pack sprites (CC0). Player sprites face right (+x).
+- `export_presets.cfg` + `tools/build_web.sh`: web export (no threads, so it runs on plain GitHub Pages).
+  `tools/build_web.sh --publish` builds and pushes the result to the `gh-pages` branch.
 
 ## Conventions
 - Units: `FT = 4` pixels per foot. Home plate is at (0, 0), the field opens toward -y, first base is +x.
@@ -41,6 +43,10 @@ godot --headless --path . --fixed-fps 60 --quit-after 100000 -- --humantest
 # screenshots to /tmp/baseball_*.png every 150 frames (needs xvfb)
 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3 --fixed-fps 60 -- --shots --humantest
 ```
+Web build: put Godot 4.3 on PATH as `godot`, install the 4.3 web template (`web_nothreads_release.zip` from the
+export templates .tpz) into `~/.local/share/godot/export_templates/4.3.stable/`, then `tools/build_web.sh`
+(add `--publish` to update the live page). Serve `build/web/` locally to test it in a browser.
+
 After gameplay changes, run about 10 `--autoplay` games and check the stats look sane. Over a 3 inning CPU game,
 typical totals are about 75-80 pitches, 30 balls in play, 15 hits, 8-9 runs (both teams), 3 strikeouts, a few
 doubles, and the odd walk, triple, home run and error. Look at a screenshot after visual changes.

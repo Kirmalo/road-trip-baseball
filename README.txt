@@ -5,6 +5,9 @@ OPEN IT ON THE TABLET
 2. Open Godot, tap Import, and pick the project.godot file inside RoadTripBaseball.
 3. Open the project and press the Play button (top right). The first open takes a moment while Godot imports the images.
 
+PLAY IN A BROWSER
+https://kirmalo.github.io/road-trip-baseball/  (works on the tablet's browser too; tap and drag like the app)
+
 HOW TO PLAY
 You are BLUE, the road team, so you bat first (the top of each inning). RED bats in the bottom.
 Drag anywhere on the left half of the screen to steer.
