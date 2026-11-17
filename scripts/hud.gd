@@ -36,7 +36,7 @@ func _to_map(p: Vector2) -> Vector2:
 
 func _draw_minimap() -> void:
 	var r := Rect2(16, 92, MAP_W, MAP_H + 34)
-	draw_rect(r, Color(0, 0, 0, 0.5))
+	draw_rect(r, Color(0.05, 0.06, 0.09, 0.85))
 	# the field: walls, infield, bases
 	var fan := PackedVector2Array()
 	for i in 91:
