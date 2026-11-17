@@ -2,6 +2,7 @@ extends Node2D
 # Draws the ballpark. Home plate is at (0, 0) and the field opens upward (negative y). Sizes are feet times FT.
 
 var game
+const View = preload("res://scripts/view.gd")
 
 const GRASS := Color(0.22, 0.52, 0.2)
 const GRASS_LIGHT := Color(0.26, 0.58, 0.24)
@@ -46,17 +47,36 @@ func _draw() -> void:
 		track.append(d * (fr - 7.0 * FT))
 		wall.append(d * fr)
 	draw_polyline(track, DIRT, 14.0 * FT)
-	draw_polyline(wall, WALL, 2.5 * FT)
+	# the wall: a strip standing up from the warning track (up is -y / tilt in this squashed frame)
+	var up := Vector2(0, -game.FENCE_H * View.ball_h() / View.tilt())
+	if View.angled():
+		for i in wall.size() - 1:
+			draw_colored_polygon(PackedVector2Array([wall[i], wall[i + 1], wall[i + 1] + up, wall[i] + up]), WALL)
+		var top := PackedVector2Array()
+		for q in wall:
+			top.append(q + up)
+		draw_polyline(top, Color(0.85, 0.75, 0.2), 0.6 * FT)
+	else:
+		draw_polyline(wall, WALL, 2.5 * FT)
 	var font := ThemeDB.fallback_font
 	for a in [-45.0, -22.0, 0.0, 22.0, 45.0]:
 		var d := _dir(deg_to_rad(a))
 		var fr: float = game.fence_radius(d * 100.0)
 		var txt := str(int(round(fr / FT)))
 		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 40).x
-		draw_string(font, d * (fr + 14.0 * FT) - Vector2(w / 2, -14), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 40, Color(1, 1, 1, 0.85))
+		var at := d * fr + up * 0.55 if View.angled() else d * (fr + 14.0 * FT)
+		draw_set_transform(at, 0, View.upright())
+		draw_string(font, Vector2(-w / 2, 14), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 40, Color(1, 1, 1, 0.9))
+		draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 	for s in [-1.0, 1.0]:
 		var d := _dir(s * PI / 4.0)
-		draw_circle(d * game.fence_radius(d * 100.0), 1.5 * FT, Color(1, 0.85, 0.1))
+		var pole: Vector2 = d * game.fence_radius(d * 100.0)
+		if View.angled():
+			draw_set_transform(pole, 0, View.upright())
+			draw_line(Vector2.ZERO, Vector2(0, -90), Color(1, 0.85, 0.1), 5.0)
+			draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
+		else:
+			draw_circle(pole, 1.5 * FT, Color(1, 0.85, 0.1))
 
 	# infield dirt: the arc 95 ft from the mound, between the foul lines
 	var mound := Vector2(0, -60.5 * FT)

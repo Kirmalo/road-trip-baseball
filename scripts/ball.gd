@@ -1,4 +1,5 @@
 extends Node2D
+const View = preload("res://scripts/view.gd")
 # The baseball. position = spot on the ground; z = height above the ground (drawn as an upward offset).
 # A batted ball follows a flight path that is worked out once at contact (path_p / path_z, 60 samples a second),
 # so the fielders can look ahead and run to where they can catch it.
@@ -32,7 +33,7 @@ var throw_to := Vector2.ZERO
 var throw_t := 0.0
 var throw_dur := 1.0
 var throw_peak := 0.0
-var trail: Array = []      # recent drawn positions of a batted ball (world space)
+var trail: Array = []      # recent positions of a batted ball: Vector3(x, y, height)
 
 func setup(g) -> void:
 	game = g
@@ -178,7 +179,7 @@ func update(delta: float) -> void:
 		DEAD:
 			z = maxf(0.0, z - 60.0 * delta)
 	if state == LIVE and speed_now() > 15.0 * FT:
-		trail.append(position + Vector2(0, -z * 0.35))
+		trail.append(Vector3(position.x, position.y, z))
 		if trail.size() > 14:
 			trail.pop_front()
 	elif not trail.is_empty():
@@ -187,16 +188,25 @@ func update(delta: float) -> void:
 
 func _draw() -> void:
 	var FT: float = game.FT
+	var hb := View.ball_h()
+	# shadow on the ground (the world's squash makes it an ellipse in the angled view)
+	if View.angled():
+		draw_circle(Vector2.ZERO, maxf(3.0, 6.0 - z / (30.0 * FT)), Color(0, 0, 0, 0.45))
+	else:
+		draw_set_transform(Vector2(0, 1.5), 0, Vector2(1, 0.55))
+		draw_circle(Vector2.ZERO, maxf(3.0, 6.0 - z / (30.0 * FT)), Color(0, 0, 0, 0.45))
+	# from here on: screen-like coordinates, height straight up
+	draw_set_transform(Vector2.ZERO, 0, View.upright())
 	# trail behind a hit ball
 	for i in range(1, trail.size()):
 		var a: float = float(i) / trail.size()
-		draw_line(trail[i - 1] - position, trail[i] - position, Color(1, 1, 1, 0.45 * a), 2.0 + 4.0 * a)
-	# shadow on the ground
-	draw_set_transform(Vector2(0, 1.5), 0, Vector2(1, 0.55))
-	draw_circle(Vector2.ZERO, maxf(3.0, 6.0 - z / (30.0 * FT)), Color(0, 0, 0, 0.45))
-	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
-	# the ball, lifted by its height (squashed so high flies stay on screen)
-	var c := Vector2(0, -z * 0.35)
+		var t0: Vector3 = trail[i - 1]
+		var t1: Vector3 = trail[i]
+		var p0 := View.local(Vector2(t0.x, t0.y) - position, t0.z * hb)
+		var p1 := View.local(Vector2(t1.x, t1.y) - position, t1.z * hb)
+		draw_line(p0, p1, Color(1, 1, 1, 0.45 * a), 2.0 + 4.0 * a)
+	# the ball, lifted by its height
+	var c := Vector2(0, -z * hb)
 	var r := 4.2 + z / (22.0 * FT)
 	draw_circle(c, r + 0.9, Color(0.1, 0.1, 0.1, 0.8))
 	draw_circle(c, r, Color(0.98, 0.97, 0.92))

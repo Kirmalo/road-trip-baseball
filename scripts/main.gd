@@ -17,6 +17,7 @@ const FieldScript = preload("res://scripts/field.gd")
 const ControlsScript = preload("res://scripts/touch_controls.gd")
 const HudScript = preload("res://scripts/hud.gd")
 const Difficulty = preload("res://scripts/difficulty.gd")
+const View = preload("res://scripts/view.gd")
 
 const FT := 4.0                       # pixels per foot
 const INNINGS := 3                    # innings per game (change to make games longer)
@@ -60,6 +61,7 @@ var ball
 var controls
 var hud
 var camera: Camera2D
+var world: Node2D          # everything on the field; its scale draws the 3/4 view (see view.gd)
 var autoplay := false
 var humantest := false
 var stats := {}
@@ -83,7 +85,7 @@ var pause_timer := 0.0
 var after_pause := ""
 var game_over := false
 var cam_follow := false
-var cam_last_pos := Vector2(0, -36 * FT)
+var cam_last_pos := Vector2(0, -30 * FT)
 var cam_last_zoom := 1.3
 
 # the current pitch
@@ -151,32 +153,37 @@ func _ready() -> void:
 	humantest = args.has("--humantest")
 	testing = not args.is_empty()
 	level = Difficulty.from_args(args, Difficulty.NORMAL if testing else Difficulty.load_level())
+	View.from_args(args)
 
+	world = Node2D.new()
+	world.scale = Vector2(1.0, View.tilt())
+	world.y_sort_enabled = true          # nearer players (lower on screen) draw in front
+	add_child(world)
 	var field = FieldScript.new()
 	field.game = self
 	field.z_index = -10
-	add_child(field)
+	world.add_child(field)
 	marker = Node2D.new()
 	marker.z_index = 1
 	marker.draw.connect(_draw_marker)
-	add_child(marker)
+	world.add_child(marker)
 
 	for t in 2:
 		for i in 9:
 			var p = PlayerScript.new()
 			var color := "blue" if t == 0 else "red"
 			p.setup(self, t, i, load("res://assets/%s_%d.png" % [color, i % 5 + 1]))
-			add_child(p)
+			world.add_child(p)
 			players.append(p)
 			teams[t].append(p)
 
 	ball = BallScript.new()
 	ball.setup(self)
-	add_child(ball)
+	world.add_child(ball)
 
 	camera = Camera2D.new()
 	camera.zoom = Vector2(1.3, 1.3)
-	camera.position = Vector2(0, -36 * FT)
+	camera.position = View.to_screen(Vector2(0, -30 * FT))
 	add_child(camera)
 	camera.make_current()
 
@@ -621,7 +628,7 @@ func _resolve_contact() -> void:
 	var from: Vector2 = ball.position
 	ball.launch(from, 3.0 * FT, dir * speed * FT * cos(lr), speed * FT * sin(lr), fair, fair)
 	cam_follow = true
-	cam_last_pos = Vector2(0, -60 * FT)
+	cam_last_pos = View.to_screen(Vector2(0, -60 * FT))
 	cam_last_zoom = 0.9
 	stat("contact")
 	if not fair:
@@ -1427,37 +1434,40 @@ func _physics_process(delta: float) -> void:
 	_update_hud()
 
 func _update_camera(delta: float) -> void:
-	# at the plate: a close look at the mound and home. In play: pull back to frame the whole play
-	# (the ball, where it will be caught, a throw and its target, every running runner) and ease there smoothly.
-	var tgt := Vector2(0, -36 * FT)
-	var zm := 1.3
+	# at the plate: a close look from behind home at the batter and the mound. In play: pull back to frame the whole
+	# play (the ball, where it will be caught, a throw and its target, every running runner) and ease there smoothly.
+	# Points are sim positions; the framing happens on screen (View.to_screen), where the camera lives.
+	var tgt := View.to_screen(Vector2(0, -34 * FT))
+	var zm := 1.45 if View.angled() else 1.3
 	if hr_called and phase == LIVE:
-		tgt = Vector2(0, -64 * FT)
-		zm = 0.7
+		tgt = View.to_screen(Vector2(0, -64 * FT))
+		zm = 0.8 if View.angled() else 0.7
 	elif cam_follow and (phase != LIVE or ball.position.length() > fence_radius(ball.position)):
 		tgt = cam_last_pos   # after the play (or a ball in the seats): stay put until the next pitch
 		zm = cam_last_zoom
 	elif cam_follow:
-		var lo: Vector2 = ball.position + Vector2(0, -ball.z * 0.35)
-		var hi := lo
-		var pts: Array = [ball.position]
+		var bp := View.to_screen(ball.position, ball.z * View.ball_h())
+		var lo := bp
+		var hi := bp
+		var pts: Array = [View.to_screen(ball.position)]
 		if ball.state == BallScript.LIVE and chaser != null:
-			pts.append(chase_point)
-			pts.append(chaser.position)
+			pts.append(View.to_screen(chase_point))
+			pts.append(View.to_screen(chaser.position))
 		if ball.state == BallScript.THROWN:
-			pts.append(ball.throw_to)
+			pts.append(View.to_screen(ball.throw_to))
 		for r in runners:
 			if not r.is_safe():
-				pts.append(r.position)
+				pts.append(View.to_screen(r.position))
 		for q in pts:
 			lo = Vector2(minf(lo.x, q.x), minf(lo.y, q.y))
 			hi = Vector2(maxf(hi.x, q.x), maxf(hi.y, q.y))
-		var margin := Vector2(70, 70) * FT
+		var margin := Vector2(70 * FT, 70 * FT * View.tilt() + 50.0)
 		var view := get_viewport_rect().size
 		var need: Vector2 = (hi - lo) + margin * 2.0
-		zm = clampf(minf(view.x / need.x, (view.y - 60.0) / need.y), 0.5, 0.95)
+		zm = clampf(minf(view.x / need.x, (view.y - 60.0) / need.y), 0.5, 1.0)
 		tgt = (lo + hi) / 2.0 + Vector2(0, -30.0 / zm)
-		tgt = Vector2(clampf(tgt.x, -230.0 * FT, 230.0 * FT), clampf(tgt.y, -300.0 * FT, 10.0 * FT))
+		var top_y := -300.0 * FT * View.tilt()
+		tgt = Vector2(clampf(tgt.x, -230.0 * FT, 230.0 * FT), clampf(tgt.y, top_y, 10.0 * FT))
 		cam_last_pos = tgt
 		cam_last_zoom = zm
 	camera.position = camera.position.lerp(tgt, 1.0 - exp(-2.6 * delta))

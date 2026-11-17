@@ -58,7 +58,9 @@ func _draw_minimap() -> void:
 	# what the camera shows, so you know where you are looking
 	var cam: Camera2D = game.camera
 	var half := get_viewport_rect().size / cam.zoom / 2.0
-	var view := Rect2(_to_map(cam.position - half), half * 2.0 / game.FT * MAP_SCALE)
+	var tl: Vector2 = game.View.to_floor(cam.position - half)
+	var br: Vector2 = game.View.to_floor(cam.position + half)
+	var view := Rect2(_to_map(tl), (br - tl) / game.FT * MAP_SCALE)
 	draw_rect(view.intersection(Rect2(r.position, Vector2(MAP_W, MAP_H))), Color(1, 1, 1, 0.35), false, 1.0)
 	# players: fielders small, runners bigger with their running arrow
 	for p in game.players:

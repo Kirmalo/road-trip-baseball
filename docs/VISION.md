@@ -57,6 +57,15 @@ city, to reach a tournament at a ballpark in the Iowa cornfields. Played by touc
 | Release | Same as Hoops: GitHub Pages as the test build; itch.io web + Android APK when ready, pay what you want |
 | Process | Phases with tablet check-ins, like Hoops |
 
+## Decisions after the Phase 1 check-in
+| Topic | Decision |
+|---|---|
+| Timing (batting) | "Timing is pretty good" |
+| Camera view | Switch to a 3/4 view (owner: "not loving top down"), replacing the earlier top-down choice. Camera raised behind home plate looking out to center field; batter and catcher in front, outfield at the top. Parallel tilt, no perspective narrowing |
+| Zone panel | Keep the strike-zone panel (timing ring, pitch meter) in the 3/4 view |
+| Players for now | Simple upright placeholder figures drawn in code (cap, team jersey, running legs, glove, bat); real pixel art in Phase 3 |
+| Top-down | Kept only as a hidden test option (`--view flat`), like Hoops |
+
 ## Draft route (open to change at the Phase 4 check-in)
 Hometown (Indiana sandlot) -> St. Louis -> Kansas City -> Chicago -> Boston -> Denver (thin air) -> San Diego ->
 Iowa cornfield tournament. Real city names; no real ballparks, teams, players, logos or brands.

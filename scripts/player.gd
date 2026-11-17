@@ -3,6 +3,9 @@ extends Node2D
 # The game manager (main.gd) decides where fielders go and when runners advance; this script moves them.
 
 enum { OFF, FIELDER, BATTER, RUNNER }
+const View = preload("res://scripts/view.gd")
+const SKINS := [Color(0.96, 0.8, 0.66), Color(0.78, 0.57, 0.4), Color(0.55, 0.37, 0.24), Color(0.9, 0.72, 0.55),
+	Color(0.42, 0.28, 0.18)]
 
 var game
 var team := 0
@@ -36,6 +39,10 @@ var run_delay := 0.0
 var swing_t := -1.0
 var bunting := false
 
+# drawing
+var stride := 0.0          # running animation phase
+var last_pos := Vector2.ZERO
+
 func setup(g, t: int, i: int, tex: Texture2D) -> void:
 	game = g
 	team = t
@@ -44,6 +51,7 @@ func setup(g, t: int, i: int, tex: Texture2D) -> void:
 	sprite.texture = tex
 	sprite.scale = Vector2(1.7, 1.7)
 	add_child(sprite)
+	sprite.visible = not View.angled()   # the angled view draws upright figures in _draw instead
 	z_index = 5
 	home_spot = game.POSITIONS[i] * game.FT
 	visible = false
@@ -63,6 +71,10 @@ func update(delta: float, human: bool, input_vec: Vector2) -> void:
 			if swing_t >= 0.0:
 				swing_t += delta
 	sprite.rotation = facing
+	# running animation from how far we actually moved
+	var moved := position.distance_to(last_pos)
+	last_pos = position
+	stride = fmod(stride + moved * 0.09, TAU) if moved > 0.2 else lerpf(stride, 0.0, 0.2)
 	queue_redraw()
 
 func _fielder_update(delta: float, human: bool, input_vec: Vector2) -> void:
@@ -120,13 +132,14 @@ func _runner_update(delta: float) -> void:
 		facing = moved.angle()
 
 func _draw() -> void:
-	# team colored disc under the sprite so the two teams are easy to tell apart
+	# on the ground (squashed into an ellipse by the world in the angled view): team disc, your ring, runner arrows
 	var col := Color(0.2, 0.45, 1.0, 0.7) if team == 0 else Color(0.95, 0.2, 0.15, 0.7)
-	draw_circle(Vector2.ZERO, 16.0, col)
+	var ground_r := 16.0
+	draw_circle(Vector2.ZERO, ground_r, Color(0, 0, 0, 0.3) if View.angled() else col)
+	if View.angled():
+		draw_arc(Vector2.ZERO, ground_r, 0, TAU, 32, col, 3.0)
 	if game.is_human(self):
 		draw_arc(Vector2.ZERO, 21.0, 0, TAU, 32, Color(1, 0.9, 0.2), 3.5)
-		var tri := PackedVector2Array([Vector2(-8, -46), Vector2(8, -46), Vector2(0, -35)])
-		draw_colored_polygon(tri, Color(1, 0.9, 0.2))
 	if mode == RUNNER and game.phase == game.LIVE and run_delay <= 0.0:
 		# green arrow: running to the next base. Red: going back
 		var to_b: int = on_base + 1 if goal > on_base else on_base
@@ -137,13 +150,90 @@ func _draw() -> void:
 			var tip := dir * 40.0
 			draw_line(dir * 22.0, tip, c, 4.0)
 			draw_colored_polygon(PackedVector2Array([tip + dir * 10.0, tip + dir.orthogonal() * 7.0, tip - dir.orthogonal() * 7.0]), c)
+	if View.angled():
+		draw_set_transform(Vector2.ZERO, 0, View.upright())
+		_draw_figure()
+	elif mode == BATTER:
+		_draw_bat(Vector2(5, 5))
+	if game.is_human(self):
+		var y := -66.0 if View.angled() else -46.0
+		var tri := PackedVector2Array([Vector2(-8, y), Vector2(8, y), Vector2(0, y + 11)])
+		draw_colored_polygon(tri, Color(1, 0.9, 0.2))
+
+func _bat_angle() -> float:
+	# cocked back, swept through the zone on a swing, squared up for a bunt (an angle on the ground)
+	if bunting:
+		return -0.15
+	if swing_t >= 0.0:
+		return lerpf(2.0, -2.8, minf(1.0, swing_t / 0.24))
+	return 2.0
+
+func _draw_bat(hands: Vector2) -> void:
+	var dir := View.local(Vector2.from_angle(_bat_angle()))
+	var lift := Vector2(0, -6) if View.angled() else Vector2.ZERO
+	draw_line(hands, hands + dir * 26.0 + lift, Color(0.55, 0.35, 0.15), 5.0)
+	draw_line(hands + dir * 13.0 + lift * 0.5, hands + dir * 26.0 + lift, Color(0.75, 0.55, 0.3), 6.5)
+
+func _draw_figure() -> void:
+	# a simple upright ballplayer in screen-like coordinates (feet at 0, 0; up is -y). Placeholder until Phase 3 art.
+	var jersey := Color(0.2, 0.42, 0.92) if team == 0 else Color(0.86, 0.2, 0.17)
+	var dark := jersey.darkened(0.35)
+	var pants := Color(0.9, 0.9, 0.88)
+	var skin: Color = SKINS[(role * 3 + team) % SKINS.size()]
+	var f := Vector2.from_angle(facing)
+	var side := 0.0                      # -1 facing left on screen, +1 right, 0 toward or away from the camera
+	if absf(f.x) > 0.35:
+		side = signf(f.x)
+	var away := f.y < -0.5 and side == 0.0
+	var run := sin(stride)
+	var crouch := 3.0 if mode == FIELDER and game.phase == game.PITCHING and role != 0 else 0.0
+	if mode == FIELDER and role == 1 and (game.phase == game.PRE_PITCH or game.phase == game.PITCHING):
+		crouch = 13.0   # the catcher squats, so you can see the batter over him
+	# legs
+	var hip_y := -18.0 + crouch
+	for k in [-1.0, 1.0]:
+		var foot := Vector2(k * 4.5 + run * k * 6.0 * (1.0 if side != 0.0 else 0.3), 0)
+		draw_line(Vector2(k * 4.0, hip_y), foot, pants, 6.0)
+		draw_circle(foot + Vector2(0, -1), 3.2, Color(0.1, 0.1, 0.12))
+	# body
+	var top := -36.0 + crouch
+	draw_rect(Rect2(-8.5, top, 17, hip_y - top + 1), jersey)
+	draw_rect(Rect2(-8.5, hip_y - 2, 17, 3), dark)
+	# arms (the glove hand is on the left of the body for fielders)
+	var sh := top + 3.0
+	var swing := -run * 5.0
+	var l_hand := Vector2(-11 + swing * 0.5, sh + 13)
+	var r_hand := Vector2(11 - swing * 0.5, sh + 13)
 	if mode == BATTER:
-		# the bat: cocked back, swept through the zone on a swing, squared up for a bunt
-		var a := 2.0
-		if bunting:
-			a = -0.15
-		elif swing_t >= 0.0:
-			a = lerpf(2.0, -2.8, minf(1.0, swing_t / 0.24))
-		var pivot := Vector2(5, 5)
-		draw_line(pivot, pivot + Vector2.from_angle(a) * 26.0, Color(0.55, 0.35, 0.15), 5.0)
-		draw_line(pivot + Vector2.from_angle(a) * 13.0, pivot + Vector2.from_angle(a) * 26.0, Color(0.75, 0.55, 0.3), 6.5)
+		l_hand = Vector2(3, sh + 6)
+		r_hand = Vector2(6, sh + 7)
+	draw_line(Vector2(-8, sh), l_hand, jersey, 5.0)
+	draw_line(Vector2(8, sh), r_hand, jersey, 5.0)
+	draw_circle(r_hand, 2.6, skin)
+	if mode == FIELDER:
+		draw_circle(l_hand, 4.6, Color(0.5, 0.3, 0.12))
+		if game.ball.state == game.ball.HELD and game.ball.holder == self:
+			draw_circle(r_hand, 3.4, Color(0.98, 0.97, 0.92))
+	else:
+		draw_circle(l_hand, 2.6, skin)
+	# number on the back
+	if away:
+		var font := ThemeDB.fallback_font
+		var n := str(role + 1)
+		draw_string(font, Vector2(-4 * n.length(), top + 13), n, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+	# head and cap
+	var head := Vector2(side * 1.0, top - 7.0)
+	draw_circle(head, 7.0, skin)
+	if not away:
+		if side == 0.0:
+			draw_circle(head + Vector2(-2.5, 0), 1.2, Color(0.1, 0.1, 0.1))
+			draw_circle(head + Vector2(2.5, 0), 1.2, Color(0.1, 0.1, 0.1))
+		else:
+			draw_circle(head + Vector2(side * 3.5, 0), 1.2, Color(0.1, 0.1, 0.1))
+	draw_rect(Rect2(head + Vector2(-7.5, -8), Vector2(15, 5.5)), jersey)
+	draw_circle(head + Vector2(0, -4), 6.0, jersey)
+	var brim := Vector2(side * 8.0, -2.5) if side != 0.0 else Vector2(0, -1.5)
+	if not away:
+		draw_line(head + Vector2(-5 + side * 3, -3), head + brim + Vector2(side * 2, 0), dark, 3.0)
+	if mode == BATTER:
+		_draw_bat((l_hand + r_hand) / 2.0)

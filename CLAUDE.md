@@ -15,6 +15,14 @@ re-importing it. There is no Git on the tablet, so keep the project self-contain
   (`on_base`, `seg_t` = 0..1 toward the next base, `goal`).
 - `scripts/ball.gd`: states DEAD, HELD, PITCH, LIVE, THROWN. A batted ball's whole flight is simulated at contact
   into `path_p`/`path_z` (60 samples a second, bounces, walls, `path_hr`), so fielders can compute intercepts.
+- `scripts/view.gd`: the projection (static, preloaded as `View`). ANGLED (default, owner's choice after Phase 1): the
+  3/4 view from behind home plate; FLAT: the old top-down view (`--view flat`). The simulation stays 2D top-down: every
+  field node is a child of `world` (main.gd), whose scale (1, `View.tilt()`) squashes the ground; upright things
+  (players, the ball's height, the wall, poles, text) undo it with `draw_set_transform(..., View.upright())` and
+  draw in screen-like coordinates (`View.local(ground_offset, height)`). The camera works in `View.to_screen()`
+  coordinates. `world.y_sort_enabled` puts nearer players in front.
+- Players in ANGLED are simple upright figures drawn in code (`_draw_figure` in player.gd) until the Phase 3 art;
+  the Kenney sprites are only used in FLAT.
 - `scripts/field.gd`: draws the park. `scripts/hud.gd`: mini-map (top-left, with count and outs), strike zone panel
   (pitch with break, timing ring, EARLY/PERFECT/LATE, aim and pitch meter) and the bottom hint line.
 - `scripts/touch_controls.gd`: floating joystick on the left half, A and B buttons on the right (same as Hoops), and
@@ -55,6 +63,7 @@ xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3
 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3 --fixed-fps 60 -- --moments --humantest
 ```
 `--difficulty easy|normal|hard` (or `--difficulty=hard`) sets the level for a test run (default NORMAL).
+`--view flat|angled` (or `--view=flat`) picks the drawing mode (default angled); the simulation is the same in both.
 Web build: put Godot 4.3 on PATH as `godot`, install the 4.3 web template (`web_nothreads_release.zip` from the
 export templates .tpz) into `~/.local/share/godot/export_templates/4.3.stable/`, then `tools/build_web.sh`
 (add `--publish` to update the live page). Serve `build/web/` locally to test it in a browser.
