@@ -51,6 +51,9 @@ After gameplay changes, run about 10 `--autoplay` games and check the stats look
 typical totals are about 75-80 pitches, 30 balls in play, 15 hits, 8-9 runs (both teams), 3 strikeouts, a few
 doubles, and the odd walk, triple, home run and error. Look at a screenshot after visual changes.
 
+## Design
+The owner-approved design and the phase plan are in `docs/VISION.md`. Follow it; record new owner answers there.
+
 ## Ideas not done yet
 Sound effects, stolen bases and pickoffs, diving catches, pitcher fatigue, difficulty setting, curveball, title
 menu, line score at the end, left-handed batters.
