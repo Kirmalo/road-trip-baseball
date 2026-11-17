@@ -2,19 +2,21 @@ extends Node2D
 # Road Trip Baseball: arcade baseball for a touch screen.
 # You are BLUE, the road team, so you bat first (the top of each inning). RED bats in the bottom.
 #
-# Touch: drag anywhere on the left half of the screen to steer.
-#   Batting:  steer the yellow circle over the incoming pitch in the zone panel and tap SWING at the right
-#             moment (B = BUNT). While the ball is in play: GO sends runners for an extra base, HOLD keeps them.
-#   Pitching: steer the red crosshair, then tap FAST (fastball) or CHANGE (slower changeup).
-#   Fielding: the fielder with the yellow ring runs to the ball by himself unless you steer him.
-#             With the ball: push toward a base and tap THROW. No direction = throw for the best out.
-# Keyboard (for testing): WASD/arrows steer, J = A button, K = B button.
+# Touch: the joystick is on the left half of the screen, the buttons on the right.
+#   Batting:  tap SWING when the ring around the pitch closes (the zone panel on the right). Hold the stick up
+#             while you swing to lift the ball, down to chop it on the ground. B = BUNT.
+#             While the ball is in play: GO sends runners for an extra base, HOLD keeps them.
+#   Pitching: steer the red crosshair, tap FAST or CHANGE, then tap again to stop the meter in the green.
+#   Fielding: fielders run and catch by themselves. When yours has the ball, tap a base button to throw there
+#             (the green one is the best play; after a moment he makes that play by himself).
+# Keyboard (for testing): WASD/arrows steer, J = A button, K = B button, 1-4 = throw to 1B, 2B, 3B, HOME.
 
 const PlayerScript = preload("res://scripts/player.gd")
 const BallScript = preload("res://scripts/ball.gd")
 const FieldScript = preload("res://scripts/field.gd")
 const ControlsScript = preload("res://scripts/touch_controls.gd")
 const HudScript = preload("res://scripts/hud.gd")
+const Difficulty = preload("res://scripts/difficulty.gd")
 
 const FT := 4.0                       # pixels per foot
 const INNINGS := 3                    # innings per game (change to make games longer)
@@ -36,8 +38,10 @@ const BASE_DIST := 90.0 * FT
 const MOUND := Vector2(0, -60.5 * FT)
 
 const SWING_DELAY := 0.12             # seconds from pressing SWING to the bat reaching the plate
-const TIMING_WINDOW := 0.13           # how early or late you can be and still hit it
-const CONTACT_R := 0.42               # size of the bat circle, in strike zone half-widths
+const CPU_WINDOW := 0.135             # CPU batters: how early or late they can be and still hit it
+const BUNT_WINDOW := 0.25
+const METER_PERIOD := 1.1             # seconds for the pitch meter to sweep across and back
+const HOLD_AUTO_TIME := 2.5           # your fielder makes the best play by himself after this long
 
 enum { PRE_PITCH, PITCHING, LIVE, PAUSE, OVER }
 enum { RUN_AUTO, RUN_GO, RUN_HOLD }
@@ -79,6 +83,8 @@ var pause_timer := 0.0
 var after_pause := ""
 var game_over := false
 var cam_follow := false
+var cam_last_pos := Vector2(0, -36 * FT)
+var cam_last_zoom := 1.3
 
 # the current pitch
 var pitch_type := FASTBALL
@@ -88,15 +94,26 @@ var pitch_mph := 90
 var pitch_clock := 0.0
 var pre_timer := 0.0
 var aim := Vector2.ZERO
-var cursor := Vector2.ZERO
 var swung := false
 var contact_at := -1.0
 var contact_te := 0.0
-var contact_d := Vector2.ZERO
+var contact_stick := 0.0               # +1 = stick held up (lift it), -1 = down (chop it)
 var contact_bunt := false
 var cpu_swing_at := -1.0
-var cpu_cursor := Vector2.ZERO
+var cpu_stick := 0.0
 var zone_show := 0.0
+var meter_active := false              # your pitch meter is sweeping
+var meter_t := 0.0
+var meter_pos := -1.0                  # -1..1, 0 = the middle of the green zone
+var swing_text := ""                   # EARLY / PERFECT / LATE after your swing
+var swing_text_timer := 0.0
+var ht_swing_err := 0.0                # --humantest: how far off the scripted swing is
+
+var level := Difficulty.NORMAL
+var testing := false
+var menu_open := false
+var menu: Control
+var marker: Node2D
 
 # the ball in play
 var play_timer := 0.0
@@ -132,11 +149,17 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	autoplay = args.has("--autoplay")
 	humantest = args.has("--humantest")
+	testing = not args.is_empty()
+	level = Difficulty.from_args(args, Difficulty.NORMAL if testing else Difficulty.load_level())
 
 	var field = FieldScript.new()
 	field.game = self
 	field.z_index = -10
 	add_child(field)
+	marker = Node2D.new()
+	marker.z_index = 1
+	marker.draw.connect(_draw_marker)
+	add_child(marker)
 
 	for t in 2:
 		for i in 9:
@@ -152,13 +175,15 @@ func _ready() -> void:
 	add_child(ball)
 
 	camera = Camera2D.new()
-	camera.zoom = Vector2(1.5, 1.5)
-	camera.position = Vector2(0, -34 * FT)
+	camera.zoom = Vector2(1.3, 1.3)
+	camera.position = Vector2(0, -36 * FT)
 	add_child(camera)
 	camera.make_current()
 
 	_build_hud()
 	_start_half()
+	if not testing:
+		_open_menu("ROAD TRIP BASEBALL", "PICK A LEVEL")
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -199,8 +224,74 @@ func _build_hud() -> void:
 	root.add_child(controls)
 	controls.a_pressed.connect(_on_a_pressed)
 	controls.b_pressed.connect(_on_b_pressed)
+	controls.base_pressed.connect(_on_base_pressed)
 	if autoplay:
 		controls.visible = false
+
+func _open_menu(title: String, sub: String) -> void:
+	# the level picker: at the start, and after every game
+	menu_open = true
+	controls.visible = false
+	menu = Control.new()
+	menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var shade := ColorRect.new()
+	shade.color = Color(0, 0, 0, 0.6)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu.add_child(shade)
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 18)
+	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	menu.add_child(box)
+	for t in [[title, 44], [sub, 26]]:
+		var l := Label.new()
+		l.text = t[0]
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var ls := LabelSettings.new()
+		ls.font_size = t[1]
+		ls.outline_size = 6
+		ls.outline_color = Color(0, 0, 0, 0.8)
+		l.label_settings = ls
+		box.add_child(l)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 24)
+	box.add_child(row)
+	var colors := [Color(0.2, 0.6, 0.3), Color(0.2, 0.45, 0.8), Color(0.75, 0.25, 0.2)]
+	for k in 3:
+		var b := Button.new()
+		b.text = Difficulty.NAMES[k]
+		b.custom_minimum_size = Vector2(230, 100)
+		b.add_theme_font_size_override("font_size", 32)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = colors[k]
+		sb.set_corner_radius_all(16)
+		sb.border_color = Color(1, 0.9, 0.2) if k == level else Color(1, 1, 1, 0.6)
+		sb.set_border_width_all(6 if k == level else 2)
+		b.add_theme_stylebox_override("normal", sb)
+		b.add_theme_stylebox_override("hover", sb)
+		b.add_theme_stylebox_override("pressed", sb)
+		b.pressed.connect(_on_level_chosen.bind(k))
+		row.add_child(b)
+	var hint := Label.new()
+	hint.text = "Easy: big timing windows.  Hard: a sharp CPU and tight timing."
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(hint)
+	controls.get_parent().add_child(menu)
+
+func _on_level_chosen(k: int) -> void:
+	level = k
+	if not testing:
+		Difficulty.save_level(k)
+	if game_over:
+		get_tree().reload_current_scene()
+		return
+	menu_open = false
+	menu.queue_free()
+	menu = null
+	controls.visible = not autoplay
 
 func _make_label(parent: Control, size: int, preset: int, top_px: float) -> Label:
 	var l := Label.new()
@@ -316,11 +407,13 @@ func _begin_pitch() -> void:
 	cam_follow = false
 	pre_timer = rng.randf_range(0.9, 1.5)
 	aim = Vector2.ZERO
-	cursor = Vector2.ZERO
 	swung = false
 	contact_at = -1.0
 	cpu_swing_at = -1.0
 	zone_show = 0.0
+	meter_active = false
+	meter_t = 0.0
+	meter_pos = -1.0
 	batter.swing_t = -1.0
 	batter.bunting = false
 	batter.position = Vector2(-3.6 * FT, 0)
@@ -375,7 +468,10 @@ func _game_end() -> void:
 	var result := "TIE GAME"
 	if score[0] != score[1]:
 		result = "%s WINS!" % ("BLUE" if score[0] > score[1] else "RED")
-	show_message("FINAL   BLUE %d - %d RED\n%s   Tap to play again" % [score[0], score[1], result], 9999.0)
+	if not testing:
+		_open_menu("FINAL   BLUE %d - %d RED" % [score[0], score[1]], "%s   PLAY AGAIN:" % result)
+	else:
+		show_message("FINAL   BLUE %d - %d RED\n%s" % [score[0], score[1], result], 9999.0)
 	if autoplay or humantest:
 		print("FINAL BLUE %d - RED %d  (hits %d - %d, innings %d)" % [score[0], score[1], hits[0], hits[1], inning])
 		print(stats)
@@ -383,15 +479,39 @@ func _game_end() -> void:
 
 # ---------------- pitching and hitting ----------------
 
+func _cpu_level() -> int:
+	return Difficulty.NORMAL if autoplay else level
+
 func _throw_pitch(type: int) -> void:
-	if phase != PRE_PITCH:
+	if phase != PRE_PITCH or meter_active:
 		return
 	pitch_type = type
 	if human_pitching():
-		pitch_loc = aim + _gauss2(0.14)
+		# start the meter; the pitch goes when you stop it
+		meter_active = true
+		meter_t = 0.0
+		meter_pos = -1.0
+		return
+	var lv := _cpu_level()
+	_deliver_pitch(_cpu_pitch_target(lv) + _gauss2(Difficulty.value(lv, "cpu_scatter")))
+
+func _release_meter() -> void:
+	if not meter_active:
+		return
+	meter_active = false
+	var off := absf(meter_pos)
+	var green := Difficulty.value(level, "meter_green")
+	var scatter := 0.05
+	if off <= green:
+		show_message("ON TARGET", 0.7)
 	else:
-		pitch_loc = _cpu_pitch_target()
-	if type == FASTBALL:
+		scatter = 0.12 + (off - green) / (1.0 - green) * 0.55
+	stat("meter_" + ("green" if off <= green else "miss"))
+	_deliver_pitch(aim + _gauss2(scatter))
+
+func _deliver_pitch(loc: Vector2) -> void:
+	pitch_loc = loc
+	if pitch_type == FASTBALL:
 		pitch_dur = rng.randf_range(0.8, 0.9)
 		pitch_mph = int(lerpf(95.0, 88.0, (pitch_dur - 0.8) / 0.1))
 	else:
@@ -401,34 +521,56 @@ func _throw_pitch(type: int) -> void:
 	ball.start_pitch(MOUND + Vector2(-1.5 * FT, 3.0 * FT), Vector2(pitch_loc.x * 0.8 * FT, -0.8 * FT), (2.5 - pitch_loc.y) * FT)
 	phase = PITCHING
 	stat("pitches")
+	ht_swing_err = rng.randfn(0.0, 0.05)
 	if not human_batting():
 		_plan_cpu_swing()
 
-func _cpu_pitch_target() -> Vector2:
-	var strike_chance := 0.5
+func _cpu_pitch_target(lv: int) -> Vector2:
+	var strike_chance := Difficulty.value(lv, "cpu_strikes")
 	if balls == 3:
 		strike_chance = 0.8
 	if rng.randf() < strike_chance:
-		return Vector2(rng.randf_range(-0.85, 0.85), rng.randf_range(-0.85, 0.85)) + _gauss2(0.1)
+		return Vector2(rng.randf_range(-0.85, 0.85), rng.randf_range(-0.85, 0.85))
 	return Vector2(rng.randf_range(-1.45, 1.45), rng.randf_range(-1.45, 1.45))
 
 func _plan_cpu_swing() -> void:
+	var lv := _cpu_level()
 	var p := 0.06
 	if _in_zone(pitch_loc):
-		p = 0.68
+		p = Difficulty.value(lv, "cpu_zone_swing")
 	elif absf(pitch_loc.x) < 1.35 and absf(pitch_loc.y) < 1.35:
-		p = 0.28
+		p = Difficulty.value(lv, "cpu_chase")
 	if strikes == 2:
 		p += 0.15
 	if rng.randf() >= p:
 		return
-	var te := rng.randfn(0.0, 0.07)
+	var te := rng.randfn(0.0, Difficulty.value(lv, "cpu_timing_sd"))
 	if pitch_type == CHANGEUP:
 		te += 0.05   # fooled a little: out in front
 	cpu_swing_at = maxf(0.05, pitch_dur - SWING_DELAY - te)
-	cpu_cursor = pitch_loc + _gauss2(0.24)
+	cpu_stick = 0.0
+	var roll := rng.randf()
+	if roll < 0.12:
+		cpu_stick = 1.0
+	elif roll < 0.24:
+		cpu_stick = -1.0
 
-func _start_swing(cur: Vector2, bunt: bool) -> void:
+func _contact_window(bunt: bool) -> float:
+	# how early or late the swing may be and still hit it; pitches off the plate are harder to hit
+	var w := CPU_WINDOW
+	if bunt:
+		w = BUNT_WINDOW
+	elif human_batting():
+		w = Difficulty.value(level, "swing_window")
+	var d := maxf(absf(pitch_loc.x), absf(pitch_loc.y))
+	if d > 1.0:
+		w *= clampf(1.0 - (d - 1.0) * 1.1, 0.25, 1.0)
+	return w
+
+func _perfect_frac() -> float:
+	return Difficulty.value(level, "perfect_frac") if human_batting() else 0.28
+
+func _start_swing(stick: float, bunt: bool) -> void:
 	if swung or phase != PITCHING:
 		return
 	swung = true
@@ -437,21 +579,25 @@ func _start_swing(cur: Vector2, bunt: bool) -> void:
 		batter.swing_t = 0.0
 	stat("swings")
 	var te := pitch_dur - (pitch_clock + SWING_DELAY)     # > 0 early, < 0 late
-	var window := 0.25 if bunt else TIMING_WINDOW
-	var r := 0.6 if bunt else CONTACT_R
-	var d := pitch_loc - cur
-	if absf(te) <= window and d.length() <= r:
+	var window := _contact_window(bunt)
+	var feel := "EARLY" if te > 0.0 else "LATE"
+	if absf(te) <= window * _perfect_frac():
+		feel = "PERFECT!"
+	if absf(te) <= window:
 		contact_at = pitch_clock + SWING_DELAY
 		contact_te = te
-		contact_d = d
+		contact_stick = stick
 		contact_bunt = bunt
+	elif feel != "PERFECT!":
+		feel = "WAY " + feel
+	if human_batting():
+		swing_text = "BUNT" if bunt and contact_at >= 0.0 else feel
+		swing_text_timer = 1.1
 
 func _resolve_contact() -> void:
-	var window := 0.25 if contact_bunt else TIMING_WINDOW
-	var r := 0.6 if contact_bunt else CONTACT_R
-	var q_time := 1.0 - absf(contact_te) / window
-	var q_aim := 1.0 - contact_d.length() / r
-	var quality := clampf(q_aim * 0.55 + q_time * 0.45, 0.0, 1.0)
+	var window := _contact_window(contact_bunt)
+	var q := 1.0 - absf(contact_te) / window
+	var perfect := absf(contact_te) <= window * _perfect_frac()
 	var speed: float
 	var launch: float
 	var spray: float
@@ -460,17 +606,23 @@ func _resolve_contact() -> void:
 		launch = rng.randf_range(-14.0, -4.0)
 		spray = -contact_te / window * 25.0 + rng.randf_range(-12.0, 12.0)
 	else:
-		speed = 52.0 + 75.0 * quality + rng.randf_range(-6.0, 6.0)
-		launch = 20.0 - contact_d.y / r * 40.0 + rng.randf_range(-7.0, 7.0)
-		spray = -contact_te / window * 55.0 + rng.randf_range(-8.0, 8.0)   # early = pulled to left field
+		speed = (54.0 + 64.0 * q) * (1.0 if _in_zone(pitch_loc) else 0.85) + rng.randf_range(-6.0, 6.0)
+		launch = 10.0 + rng.randfn(0.0, 15.0) - pitch_loc.y * 6.0 + contact_stick * 18.0
+		if perfect:
+			speed += 4.0
+			launch = lerpf(launch, 18.0 + contact_stick * 12.0, 0.35)
+			stat("perfect")
+		spray = -contact_te / window * 62.0 + rng.randf_range(-9.0, 9.0)   # early = pulled to left field
 	var fair := absf(spray) <= 45.0
 	var dir := Vector2(sin(deg_to_rad(spray)), -cos(deg_to_rad(spray)))
 	var lr := deg_to_rad(launch)
 	if OS.get_cmdline_user_args().has("--debug"):
-		print("contact q=%.2f speed=%d launch=%d spray=%d" % [quality, speed, launch, spray])
+		print("contact q=%.2f speed=%d launch=%d spray=%d" % [q, speed, launch, spray])
 	var from: Vector2 = ball.position
 	ball.launch(from, 3.0 * FT, dir * speed * FT * cos(lr), speed * FT * sin(lr), fair, fair)
 	cam_follow = true
+	cam_last_pos = Vector2(0, -60 * FT)
+	cam_last_zoom = 0.9
 	stat("contact")
 	if not fair:
 		stat("fouls")
@@ -641,13 +793,18 @@ func _intercept(f) -> Array:
 		var t := float(k - i0) / 60.0
 		if ball.path_z[k] < CATCH_Z:
 			var pk: Vector2 = ball.path_p[k]
-			var need := run_time(maxf(0.0, f.position.distance_to(pk) - REACH * 0.7)) + FIELD_REACT
+			var need := run_time(maxf(0.0, f.position.distance_to(pk) - REACH * 0.7)) + _react(f)
 			if need <= t:
 				return [t, pk]
 		k += 3
 	var last: Vector2 = ball.path_p[n - 1]
-	var t_end := maxf(float(n - 1 - i0) / 60.0, run_time(f.position.distance_to(last)) + FIELD_REACT)
+	var t_end := maxf(float(n - 1 - i0) / 60.0, run_time(f.position.distance_to(last)) + _react(f))
 	return [t_end, last]
+
+func _react(f) -> float:
+	if not autoplay and f.team != HUMAN_TEAM:
+		return Difficulty.value(level, "cpu_react")
+	return FIELD_REACT
 
 func run_time(d: float) -> float:
 	# time for a fielder starting from a standstill to cover d pixels
@@ -903,8 +1060,8 @@ func _holder_logic(delta: float) -> void:
 		return
 	h.hold_timer += delta
 	if is_human(h):
-		if h.hold_timer > 3.0:
-			_cpu_fielder_play(h, true)   # you dozed off: make the play for you
+		if h.hold_timer > HOLD_AUTO_TIME and not h.running_to_base:
+			_cpu_fielder_play(h, true)   # no button pressed: he makes the best play himself
 			h.hold_timer = 0.0
 		return
 	if h.hold_timer < _release_time(h):
@@ -919,7 +1076,12 @@ func _release_time(h) -> float:
 	return 0.6 if h.role >= 6 else 0.3
 
 func _cpu_fielder_play(h, force_throw: bool) -> void:
-	# go for the runner we can beat by the most (lead runners first)
+	var b := best_play(h, force_throw)
+	if b >= 0:
+		_play_on_base(h, b)
+
+func best_play(h, force_throw: bool) -> int:
+	# the base to go to: the runner we can beat by the most (lead runners first), else back to the infield
 	var best_base := -1
 	var best_s := -INF
 	for r in runners:
@@ -943,14 +1105,14 @@ func _cpu_fielder_play(h, force_throw: bool) -> void:
 			best_s = m + b * 0.3
 			best_base = b
 	if best_base >= 0:
-		_play_on_base(h, best_base)
-		return
+		return best_base
 	# no out to be had: outfielders get the ball back to the infield
 	if h.role >= 6 or force_throw:
 		var lead := 1
 		for r in runners:
 			lead = maxi(lead, r.on_base + 1)
-		_play_on_base(h, mini(lead, 4) if lead > 1 else 2)
+		return mini(lead, 4) if lead > 1 else 2
+	return -1
 
 func _play_on_base(h, b: int) -> void:
 	var to := base_pos(b)
@@ -1074,50 +1236,49 @@ func _end_play() -> void:
 
 # ---------------- input ----------------
 
+func _stick() -> float:
+	var v := _input_vector()
+	if v.y < -0.4:
+		return 1.0
+	if v.y > 0.4:
+		return -1.0
+	return 0.0
+
 func _on_a_pressed() -> void:
-	if game_over:
-		get_tree().reload_current_scene()
+	if menu_open or game_over:
 		return
 	if phase == PRE_PITCH and human_pitching():
-		_throw_pitch(FASTBALL)
+		if meter_active:
+			_release_meter()
+		else:
+			_throw_pitch(FASTBALL)
 	elif phase == PITCHING and human_batting():
-		_start_swing(cursor, false)
+		_start_swing(_stick(), false)
 	elif phase == LIVE and human_batting():
 		run_mode = RUN_GO
 		show_message("GO! GO! GO!", 0.7)
 		_runner_decisions()
-	elif phase == LIVE and human_pitching() and ball.state == BallScript.HELD and is_human(ball.holder):
-		_human_throw()
 
 func _on_b_pressed() -> void:
-	if game_over:
+	if menu_open or game_over:
 		return
 	if phase == PRE_PITCH and human_pitching():
-		_throw_pitch(CHANGEUP)
+		if meter_active:
+			_release_meter()
+		else:
+			_throw_pitch(CHANGEUP)
 	elif phase == PITCHING and human_batting():
-		_start_swing(cursor, true)
+		_start_swing(0.0, true)
 	elif phase == LIVE and human_batting():
 		run_mode = RUN_HOLD
 		show_message("HOLD UP!", 0.7)
 		_runner_decisions()
 
-func _human_throw() -> void:
-	var h = ball.holder
-	var v := _input_vector()
-	if v.length() < 0.3:
-		_cpu_fielder_play(h, true)
+func _on_base_pressed(b: int) -> void:
+	if menu_open or phase != LIVE or not human_pitching() or ball.state != BallScript.HELD or not is_human(ball.holder):
 		return
-	var best := 1
-	var best_dot := -INF
-	for b in [1, 2, 3, 0]:
-		var to: Vector2 = base_pos(b) - h.position
-		if to.length() < 6.0 * FT:
-			continue
-		var dt: float = v.normalized().dot(to.normalized())
-		if dt > best_dot:
-			best_dot = dt
-			best = b
-	_play_on_base(h, best)
+	stat("base_button")
+	_play_on_base(ball.holder, b)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -1125,6 +1286,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_on_a_pressed()
 		elif event.keycode == KEY_K:
 			_on_b_pressed()
+		elif event.keycode >= KEY_1 and event.keycode <= KEY_4:
+			_on_base_pressed((event.keycode - KEY_1 + 1) % 4)
 
 func _input_vector() -> Vector2:
 	var v: Vector2 = controls.joystick()
@@ -1138,29 +1301,32 @@ func _input_vector() -> Vector2:
 
 # developer testing only (-- --humantest): a scripted "thumb" that uses every control
 func _humantest_input() -> Vector2:
-	if phase == PITCHING and human_batting():
-		var to := pitch_loc - cursor
-		return to.normalized() if to.length() > 0.05 else Vector2.ZERO
-	if phase == PRE_PITCH and human_pitching():
+	if phase == PRE_PITCH and human_pitching() and not meter_active:
 		var to2 := Vector2(0.5, 0.3) - aim
 		return to2.normalized() if to2.length() > 0.05 else Vector2.ZERO
+	if phase == PITCHING and human_batting():
+		return [Vector2.ZERO, Vector2.UP, Vector2.DOWN][_frame / 400 % 3]
 	return Vector2.ZERO
 
 func _humantest_presses() -> void:
-	if phase == PRE_PITCH and human_pitching() and _frame % 50 == 0:
-		if rng.randf() < 0.6:
+	if phase == PRE_PITCH and human_pitching():
+		if not meter_active and _frame % 50 == 0:
+			if rng.randf() < 0.6:
+				_on_a_pressed()
+			else:
+				_on_b_pressed()
+		elif meter_active and (absf(meter_pos) < 0.08 or meter_t > 1.8):
 			_on_a_pressed()
-		else:
-			_on_b_pressed()
-	elif phase == PITCHING and human_batting() and not swung and pitch_clock >= pitch_dur - SWING_DELAY - 0.02:
+	elif phase == PITCHING and human_batting() and not swung and pitch_clock >= pitch_dur - SWING_DELAY + ht_swing_err:
 		if _in_zone(pitch_loc) or rng.randf() < 0.03:
 			if rng.randf() < 0.08:
 				_on_b_pressed()
 			else:
 				_on_a_pressed()
 	elif phase == LIVE:
-		if human_pitching() and ball.state == BallScript.HELD and is_human(ball.holder) and ball.holder.hold_timer > 0.4:
-			_on_a_pressed()
+		if human_pitching() and ball.state == BallScript.HELD and is_human(ball.holder) and ball.holder.hold_timer > 0.5:
+			var b := best_play(ball.holder, true)
+			_on_base_pressed(b if rng.randf() < 0.7 else rng.randi() % 4)
 		if human_batting() and _frame % 150 == 0:
 			if rng.randf() < 0.5:
 				_on_a_pressed()
@@ -1171,8 +1337,30 @@ func _humantest_presses() -> void:
 
 var _frame := 0
 
+var _moment_shots := {}
+
 func _debug_screenshots() -> void:
-	# developer testing only: run with -- --shots to save screenshots to /tmp
+	# developer testing only: -- --moments saves one screenshot of each key moment to /tmp/baseball_<moment>.png
+	if OS.get_cmdline_user_args().has("--moments"):
+		var m := ""
+		if phase == PITCHING and human_batting() and pitch_clock > pitch_dur * 0.55:
+			m = "bat_ring"
+		elif phase == PRE_PITCH and meter_active and meter_t > 0.35:
+			m = "pitch_meter"
+		elif phase == PRE_PITCH and human_pitching() and not meter_active and aim.length() > 0.3:
+			m = "pitch_aim"
+		elif phase == LIVE and ball.state == BallScript.HELD and is_human(ball.holder) and ball.holder.hold_timer > 0.2:
+			m = "throw_bases"
+		elif phase == LIVE and ball.state == BallScript.LIVE and ball.can_fly_out and ball.path_bounce - ball.index_now() > 60 and play_timer > 1.0:
+			m = "fly_marker"
+		elif phase == LIVE and human_batting() and play_timer > 1.5 and runners.size() >= 2:
+			m = "running"
+		if m != "" and not _moment_shots.has(m):
+			_moment_shots[m] = true
+			get_viewport().get_texture().get_image().save_png("/tmp/baseball_%s.png" % m)
+			print("MOMENT ", m)
+			if _moment_shots.size() >= 5:
+				get_tree().quit()
 	if OS.get_cmdline_user_args().has("--shots") and _frame % 150 == 0 and _frame > 0:
 		get_viewport().get_texture().get_image().save_png("/tmp/baseball_%04d.png" % _frame)
 		if _frame >= 3000:
@@ -1182,26 +1370,35 @@ func _physics_process(delta: float) -> void:
 	_frame += 1
 	_debug_screenshots()
 	_update_message(delta)
+	marker.queue_redraw()
+	if menu_open:
+		_update_camera(delta)
+		_update_hud()
+		return
 	zone_show = maxf(0.0, zone_show - delta)
+	swing_text_timer = maxf(0.0, swing_text_timer - delta)
 	var input := _input_vector()
 	match phase:
 		PRE_PITCH:
 			if human_pitching():
-				aim = (aim + input * 1.8 * delta).clamp(Vector2(-1.6, -1.6), Vector2(1.6, 1.6))
+				if meter_active:
+					meter_t += delta
+					meter_pos = -cos(meter_t * TAU / METER_PERIOD)
+					if meter_t > METER_PERIOD * 2.0:
+						meter_pos = 1.0
+						_release_meter()   # too slow: it sails
+				else:
+					aim = (aim + input * 1.8 * delta).clamp(Vector2(-1.6, -1.6), Vector2(1.6, 1.6))
 			else:
 				pre_timer -= delta
 				if pre_timer <= 0.0:
 					_throw_pitch(FASTBALL if rng.randf() < 0.65 else CHANGEUP)
-			if human_batting():
-				cursor = (cursor + input * 2.6 * delta).clamp(Vector2(-1.5, -1.5), Vector2(1.5, 1.5))
 		PITCHING:
 			pitch_clock += delta
 			ball.pitch_t = minf(1.0, pitch_clock / pitch_dur)
-			if human_batting():
-				cursor = (cursor + input * 2.6 * delta).clamp(Vector2(-1.5, -1.5), Vector2(1.5, 1.5))
 			if cpu_swing_at >= 0.0 and pitch_clock >= cpu_swing_at:
 				cpu_swing_at = -1.0
-				_start_swing(cpu_cursor, false)
+				_start_swing(cpu_stick, false)
 			if contact_at >= 0.0 and pitch_clock >= contact_at:
 				contact_at = -1.0
 				_resolve_contact()
@@ -1230,17 +1427,57 @@ func _physics_process(delta: float) -> void:
 	_update_hud()
 
 func _update_camera(delta: float) -> void:
-	var tgt := Vector2(0, -34 * FT)
-	var zm := 1.5
+	# at the plate: a close look at the mound and home. In play: pull back to frame the whole play
+	# (the ball, where it will be caught, a throw and its target, every running runner) and ease there smoothly.
+	var tgt := Vector2(0, -36 * FT)
+	var zm := 1.3
 	if hr_called and phase == LIVE:
 		tgt = Vector2(0, -64 * FT)
-		zm = 0.85
+		zm = 0.7
+	elif cam_follow and (phase != LIVE or ball.position.length() > fence_radius(ball.position)):
+		tgt = cam_last_pos   # after the play (or a ball in the seats): stay put until the next pitch
+		zm = cam_last_zoom
 	elif cam_follow:
-		tgt = ball.position + Vector2(0, -ball.z * 0.35)
-		zm = 0.95
-	camera.position = camera.position.lerp(tgt, 1.0 - exp(-5.0 * delta))
-	var zz := lerpf(camera.zoom.x, zm, 1.0 - exp(-3.0 * delta))
+		var lo: Vector2 = ball.position + Vector2(0, -ball.z * 0.35)
+		var hi := lo
+		var pts: Array = [ball.position]
+		if ball.state == BallScript.LIVE and chaser != null:
+			pts.append(chase_point)
+			pts.append(chaser.position)
+		if ball.state == BallScript.THROWN:
+			pts.append(ball.throw_to)
+		for r in runners:
+			if not r.is_safe():
+				pts.append(r.position)
+		for q in pts:
+			lo = Vector2(minf(lo.x, q.x), minf(lo.y, q.y))
+			hi = Vector2(maxf(hi.x, q.x), maxf(hi.y, q.y))
+		var margin := Vector2(70, 70) * FT
+		var view := get_viewport_rect().size
+		var need: Vector2 = (hi - lo) + margin * 2.0
+		zm = clampf(minf(view.x / need.x, (view.y - 60.0) / need.y), 0.5, 0.95)
+		tgt = (lo + hi) / 2.0 + Vector2(0, -30.0 / zm)
+		tgt = Vector2(clampf(tgt.x, -230.0 * FT, 230.0 * FT), clampf(tgt.y, -300.0 * FT, 10.0 * FT))
+		cam_last_pos = tgt
+		cam_last_zoom = zm
+	camera.position = camera.position.lerp(tgt, 1.0 - exp(-2.6 * delta))
+	var zz := lerpf(camera.zoom.x, zm, 1.0 - exp(-1.8 * delta))
 	camera.zoom = Vector2(zz, zz)
+
+func _draw_marker() -> void:
+	# where a fly ball will come down
+	if phase != LIVE or ball.state != BallScript.LIVE or not ball.can_fly_out or ball.path_bounce < 0:
+		return
+	var i: int = ball.index_now()
+	if i >= ball.path_bounce or ball.path_bounce - i < 20:
+		return
+	var p: Vector2 = ball.path_p[ball.path_bounce]
+	var pulse := 0.5 + 0.5 * sin(play_timer * 9.0)
+	var r := 7.0 * FT
+	marker.draw_circle(p, r, Color(1, 0.9, 0.2, 0.16))
+	marker.draw_arc(p, r * (0.75 + 0.25 * pulse), 0, TAU, 36, Color(1, 0.9, 0.2, 0.95), 4.0)
+	marker.draw_line(p - Vector2(r * 0.45, 0), p + Vector2(r * 0.45, 0), Color(1, 0.9, 0.2, 0.9), 3.0)
+	marker.draw_line(p - Vector2(0, r * 0.45), p + Vector2(0, r * 0.45), Color(1, 0.9, 0.2, 0.9), 3.0)
 
 # ---------------- HUD ----------------
 
@@ -1261,19 +1498,22 @@ func _update_hud() -> void:
 	batter_label.text = "AT BAT: %s #%d" % [TEAM_NAMES[batting], batter.role + 1] if batter != null else ""
 	var a := "-"
 	var b := "-"
+	var bases := false
 	if phase == PRE_PITCH or phase == PITCHING:
 		if human_pitching():
 			if phase == PRE_PITCH:
-				a = "FAST"
-				b = "CHANGE"
+				a = "STOP" if meter_active else "FAST"
+				b = "STOP" if meter_active else "CHANGE"
 		elif human_batting():
 			a = "SWING"
 			b = "BUNT"
 	elif phase == LIVE:
 		if human_batting():
-			a = "GO"
+			a = "GO!"
 			b = "HOLD"
 		elif ball.state == BallScript.HELD and is_human(ball.holder):
-			a = "THROW"
+			bases = true
+			controls.base_hint = best_play(ball.holder, true) % 4
 	controls.a_text = a
 	controls.b_text = b
+	controls.show_bases = bases

@@ -17,7 +17,7 @@ func _draw() -> void:
 	var FT: float = game.FT
 
 	# stands and crowd
-	draw_rect(Rect2(-560 * FT, -480 * FT, 1120 * FT, 620 * FT), Color(0.15, 0.16, 0.21))
+	draw_rect(Rect2(-900 * FT, -800 * FT, 1800 * FT, 1000 * FT), Color(0.15, 0.16, 0.21))
 	var r := RandomNumberGenerator.new()
 	r.seed = 7
 	for i in 1800:

@@ -15,8 +15,16 @@ re-importing it. There is no Git on the tablet, so keep the project self-contain
   (`on_base`, `seg_t` = 0..1 toward the next base, `goal`).
 - `scripts/ball.gd`: states DEAD, HELD, PITCH, LIVE, THROWN. A batted ball's whole flight is simulated at contact
   into `path_p`/`path_z` (60 samples a second, bounces, walls, `path_hr`), so fielders can compute intercepts.
-- `scripts/field.gd`: draws the park. `scripts/hud.gd`: base/out diamond and strike zone panel.
-- `scripts/touch_controls.gd`: floating joystick on the left half, A and B buttons on the right (same as Hoops).
+- `scripts/field.gd`: draws the park. `scripts/hud.gd`: mini-map (top-left, with count and outs), strike zone panel
+  (pitch with break, timing ring, EARLY/PERFECT/LATE, aim and pitch meter) and the bottom hint line.
+- `scripts/touch_controls.gd`: floating joystick on the left half, A and B buttons on the right (same as Hoops), and
+  the four base buttons (`show_bases`, signal `base_pressed(b)`, b = 0 home .. 3) while your fielder holds the ball.
+- `scripts/difficulty.gd`: EASY / NORMAL / HARD values (`Difficulty.value(level, key)`), the saved level in
+  `user://settings.cfg` (never saved by test runs) and `--difficulty`. The level picker is `_open_menu()` in main.gd
+  (at start and after each game; skipped when any user argument is given).
+- Controls (Phase 1): batting is one tap (timing; stick up/down = loft/chop, `_start_swing`/`_resolve_contact`);
+  pitching is aim + pitch button + meter (`_throw_pitch` -> `_release_meter` -> `_deliver_pitch`); fielding is fully
+  automatic, your only fielding input is the throw (`_on_base_pressed`, auto `best_play()` after `HOLD_AUTO_TIME`).
 - `assets/`: Kenney Sports Pack sprites (CC0). Player sprites face right (+x).
 - `export_presets.cfg` + `tools/build_web.sh`: web export (no threads, so it runs on plain GitHub Pages).
   `tools/build_web.sh --publish` builds and pushes the result to the `gh-pages` branch.
@@ -42,7 +50,11 @@ godot --headless --path . --fixed-fps 60 --quit-after 80000 -- --autoplay
 godot --headless --path . --fixed-fps 60 --quit-after 100000 -- --humantest
 # screenshots to /tmp/baseball_*.png every 150 frames (needs xvfb)
 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3 --fixed-fps 60 -- --shots --humantest
+# one screenshot per key moment (bat_ring, pitch_aim, pitch_meter, throw_bases, fly_marker, running) to
+# /tmp/baseball_<moment>.png, quits after 5 (software rendering is slow: allow ~10 minutes)
+xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3 --fixed-fps 60 -- --moments --humantest
 ```
+`--difficulty easy|normal|hard` (or `--difficulty=hard`) sets the level for a test run (default NORMAL).
 Web build: put Godot 4.3 on PATH as `godot`, install the 4.3 web template (`web_nothreads_release.zip` from the
 export templates .tpz) into `~/.local/share/godot/export_templates/4.3.stable/`, then `tools/build_web.sh`
 (add `--publish` to update the live page). Serve `build/web/` locally to test it in a browser.

@@ -32,6 +32,7 @@ var throw_to := Vector2.ZERO
 var throw_t := 0.0
 var throw_dur := 1.0
 var throw_peak := 0.0
+var trail: Array = []      # recent drawn positions of a batted ball (world space)
 
 func setup(g) -> void:
 	game = g
@@ -128,7 +129,7 @@ func _simulate(p0: Vector2, z0: float, v0: Vector2, vz0: float, fair: bool) -> v
 			zz += vz * dt
 			if zz <= 0.0:
 				zz = 0.0
-				if path_bounce < 0:
+				if path_bounce < 0 and path_hr < 0:   # a home run never "lands" for the fielders
 					path_bounce = i + 1
 				vz = -vz * 0.38
 				v *= 0.72
@@ -176,17 +177,27 @@ func update(delta: float) -> void:
 			z = 5.0 * FT + 4.0 * throw_peak * throw_t * (1.0 - throw_t)
 		DEAD:
 			z = maxf(0.0, z - 60.0 * delta)
+	if state == LIVE and speed_now() > 15.0 * FT:
+		trail.append(position + Vector2(0, -z * 0.35))
+		if trail.size() > 14:
+			trail.pop_front()
+	elif not trail.is_empty():
+		trail.pop_front()
 	queue_redraw()
 
 func _draw() -> void:
 	var FT: float = game.FT
+	# trail behind a hit ball
+	for i in range(1, trail.size()):
+		var a: float = float(i) / trail.size()
+		draw_line(trail[i - 1] - position, trail[i] - position, Color(1, 1, 1, 0.45 * a), 2.0 + 4.0 * a)
 	# shadow on the ground
-	draw_set_transform(Vector2(0, 1), 0, Vector2(1, 0.55))
-	draw_circle(Vector2.ZERO, maxf(1.5, 3.2 - z / (40.0 * FT)), Color(0, 0, 0, 0.4))
+	draw_set_transform(Vector2(0, 1.5), 0, Vector2(1, 0.55))
+	draw_circle(Vector2.ZERO, maxf(3.0, 6.0 - z / (30.0 * FT)), Color(0, 0, 0, 0.45))
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 	# the ball, lifted by its height (squashed so high flies stay on screen)
 	var c := Vector2(0, -z * 0.35)
-	var r := 2.6 + z / (30.0 * FT)
+	var r := 4.2 + z / (22.0 * FT)
 	draw_circle(c, r + 0.9, Color(0.1, 0.1, 0.1, 0.8))
 	draw_circle(c, r, Color(0.98, 0.97, 0.92))
 	if r > 3.2:

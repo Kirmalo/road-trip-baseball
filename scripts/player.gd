@@ -42,7 +42,7 @@ func setup(g, t: int, i: int, tex: Texture2D) -> void:
 	role = i
 	sprite = Sprite2D.new()
 	sprite.texture = tex
-	sprite.scale = Vector2(1.15, 1.15)
+	sprite.scale = Vector2(1.7, 1.7)
 	add_child(sprite)
 	z_index = 5
 	home_spot = game.POSITIONS[i] * game.FT
@@ -70,9 +70,7 @@ func _fielder_update(delta: float, human: bool, input_vec: Vector2) -> void:
 	if game.phase == game.PAUSE:
 		spd *= 1.6
 	var desired := Vector2.ZERO
-	if human and input_vec.length() > 0.2:
-		desired = input_vec.limit_length(1.0) * spd
-	elif game.phase == game.LIVE or game.phase == game.PAUSE:
+	if game.phase == game.LIVE or game.phase == game.PAUSE:   # fielding is automatic, also for you
 		desired = _seek(target, spd)
 	velocity = velocity.move_toward(desired, game.FIELD_ACCEL * (2.5 if game.phase != game.LIVE else 1.0) * delta)
 	position += velocity * delta
@@ -123,12 +121,22 @@ func _runner_update(delta: float) -> void:
 
 func _draw() -> void:
 	# team colored disc under the sprite so the two teams are easy to tell apart
-	var col := Color(0.2, 0.45, 1.0, 0.65) if team == 0 else Color(0.95, 0.2, 0.15, 0.65)
-	draw_circle(Vector2.ZERO, 11.0, col)
+	var col := Color(0.2, 0.45, 1.0, 0.7) if team == 0 else Color(0.95, 0.2, 0.15, 0.7)
+	draw_circle(Vector2.ZERO, 16.0, col)
 	if game.is_human(self):
-		draw_arc(Vector2.ZERO, 15.0, 0, TAU, 28, Color(1, 0.9, 0.2), 2.5)
-		var tri := PackedVector2Array([Vector2(-6, -32), Vector2(6, -32), Vector2(0, -24)])
+		draw_arc(Vector2.ZERO, 21.0, 0, TAU, 32, Color(1, 0.9, 0.2), 3.5)
+		var tri := PackedVector2Array([Vector2(-8, -46), Vector2(8, -46), Vector2(0, -35)])
 		draw_colored_polygon(tri, Color(1, 0.9, 0.2))
+	if mode == RUNNER and game.phase == game.LIVE and run_delay <= 0.0:
+		# green arrow: running to the next base. Red: going back
+		var to_b: int = on_base + 1 if goal > on_base else on_base
+		var d: Vector2 = game.base_pos(to_b) - position
+		if d.length() > 6.0 * game.FT:
+			var dir := d.normalized()
+			var c := Color(0.3, 1.0, 0.4) if goal > on_base else Color(1.0, 0.35, 0.3)
+			var tip := dir * 40.0
+			draw_line(dir * 22.0, tip, c, 4.0)
+			draw_colored_polygon(PackedVector2Array([tip + dir * 10.0, tip + dir.orthogonal() * 7.0, tip - dir.orthogonal() * 7.0]), c)
 	if mode == BATTER:
 		# the bat: cocked back, swept through the zone on a swing, squared up for a bunt
 		var a := 2.0
@@ -136,6 +144,6 @@ func _draw() -> void:
 			a = -0.15
 		elif swing_t >= 0.0:
 			a = lerpf(2.0, -2.8, minf(1.0, swing_t / 0.24))
-		var pivot := Vector2(3, 3)
-		draw_line(pivot, pivot + Vector2.from_angle(a) * 17.0, Color(0.55, 0.35, 0.15), 3.5)
-		draw_line(pivot + Vector2.from_angle(a) * 9.0, pivot + Vector2.from_angle(a) * 17.0, Color(0.75, 0.55, 0.3), 4.5)
+		var pivot := Vector2(5, 5)
+		draw_line(pivot, pivot + Vector2.from_angle(a) * 26.0, Color(0.55, 0.35, 0.15), 5.0)
+		draw_line(pivot + Vector2.from_angle(a) * 13.0, pivot + Vector2.from_angle(a) * 26.0, Color(0.75, 0.55, 0.3), 6.5)
