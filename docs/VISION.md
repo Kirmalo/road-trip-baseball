@@ -65,6 +65,8 @@ city, to reach a tournament at a ballpark in the Iowa cornfields. Played by touc
 | Zone panel | Keep the strike-zone panel (timing ring, pitch meter) in the 3/4 view |
 | Players for now | Simple upright placeholder figures drawn in code (cap, team jersey, running legs, glove, bat); real pixel art in Phase 3 |
 | Top-down | Kept only as a hidden test option (`--view flat`), like Hoops |
+| 3/4 check | "The angle is better" |
+| Phase 1 check-in | Play camera, base-button throwing with the 2.5 s auto-throw, and the pitch meter: all good as is. Easy was too easy, because of hitting: every level's swing window and PERFECT zone tightened (Easy 0.17 -> 0.145 s, Normal 0.135 -> 0.12 s, Hard 0.10 -> 0.095 s; PERFECT share 0.35/0.28/0.22 -> 0.28/0.24/0.2) |
 
 ## Draft route (open to change at the Phase 4 check-in)
 Hometown (Indiana sandlot) -> St. Louis -> Kansas City -> Chicago -> Boston -> Denver (thin air) -> San Diego ->

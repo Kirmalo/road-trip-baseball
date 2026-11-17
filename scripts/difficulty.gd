@@ -7,8 +7,9 @@ const NAMES := ["EASY", "NORMAL", "HARD"]
 
 # value per level: [EASY, NORMAL, HARD]
 const VALUES := {
-	"swing_window": [0.17, 0.135, 0.10],     # your swing: seconds early/late that still make contact
-	"perfect_frac": [0.35, 0.28, 0.22],      # the share of that window that counts as PERFECT
+	"swing_window": [0.145, 0.12, 0.095],    # your swing: seconds early/late that still make contact
+	                                         # (Phase 1 check-in: Easy hitting too easy, was 0.17 / 0.135 / 0.10)
+	"perfect_frac": [0.28, 0.24, 0.2],       # the share of that window that counts as PERFECT (was 0.35 / 0.28 / 0.22)
 	"meter_green": [0.24, 0.17, 0.11],       # your pitch meter: half width of the green zone (0..1 bar)
 	"cpu_zone_swing": [0.6, 0.66, 0.72],     # CPU batter: chance to swing at a strike
 	"cpu_chase": [0.36, 0.28, 0.2],          # ... and at a pitch just off the plate
