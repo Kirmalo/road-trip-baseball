@@ -68,6 +68,11 @@ city, to reach a tournament at a ballpark in the Iowa cornfields. Played by touc
 | 3/4 check | "The angle is better" |
 | Phase 1 check-in | Play camera, base-button throwing with the 2.5 s auto-throw, and the pitch meter: all good as is. Easy was too easy, because of hitting: every level's swing window and PERFECT zone tightened (Easy 0.17 -> 0.145 s, Normal 0.135 -> 0.12 s, Hard 0.10 -> 0.095 s; PERFECT share 0.35/0.28/0.22 -> 0.28/0.24/0.2) |
 
+## Research round 2 (after Phase 2)
+| Topic | Decision |
+|---|---|
+| Deep research | Owner asked for deep research on what makes baseball games fun before going deeper; report in `docs/research/what-makes-baseball-games-fun.md`. Owner approved folding its prioritized recommendations into the phase plan (below). Caveat: the research came from search-result summaries, since full pages could not be fetched in that session |
+
 ## Phase 2 plan answers
 | Topic | Decision |
 |---|---|
@@ -84,18 +89,48 @@ Iowa cornfield tournament. Real city names; no real ballparks, teams, players, l
 
 ## Phase plan
 Each phase ends with a ZIP/web build the owner plays on the tablet and a short set of check-in questions.
-1. **Feel and readability.** Bigger sprites and ball, high overhead smooth camera, landing marker, mini-map;
-   one-tap batting with the timing ring and stick loft; pitch meter and visible break; auto fielding with base
-   buttons; clearer GO/HOLD; Easy/Normal/Hard. Goal: a quick game that is fun and easy to follow.
-2. **Baseball depth.** Player ratings, 3-4 pitch types per pitcher, stamina and the bullpen, diving and wall catches,
-   stealing and pickoffs, Home Run Derby.
-3. **Art and sound.** Style sample for approval, then players and animations, ballparks, chiptune music and sound
-   effects; title, settings and pause screens.
-4. **The road trip.** Cities with twists, local teams, recruits, stat points, story scenes with the Hoops crew,
-   the Iowa finale, saving.
-5. **Release.** How to Play pages, itch.io page and screenshots, Android APK.
+The research report `docs/research/what-makes-baseball-games-fun.md` (owner-approved to shape this plan) found the
+controls already match what the best-loved baseball games do; the biggest gains now are feel, fairness and
+personality. Its priorities (P1-P17) are folded in below.
+
+1. **Feel and readability** (done). Bigger sprites and ball, smooth camera, landing marker, mini-map; one-tap
+   batting with the timing ring and stick loft; pitch meter and visible break; auto fielding with base buttons;
+   clearer GO/HOLD; Easy/Normal/Hard; then the 3/4 view.
+2. **Baseball depth** (done). Player ratings and cards, 3-4 pitch types per pitcher, stamina and the bullpen, diving
+   and wall catches, stealing and pickoffs, Home Run Derby.
+3. **Feel, fairness, art and sound.** Starts with the research's top priorities, in this order:
+   - Sound pass (P1): bat crack scaled by contact quality, glove pop, umpire calls (strike, out, safe), a crowd that
+     swells on deep flies and roars on homers, a short organ or chiptune sting between innings.
+   - Contact juice scaled to quality (P2): PERFECT gets a few frames of hit-stop, a crisp crack, a small camera pulse
+     and the trail; GOOD gets less; weak or foul contact only a dull thud.
+   - PERFECT means hard contact (P3): randomness goes into direction, not contact quality; a short exit-speed
+     readout after contact.
+   - Fair touch timing (P4): judge taps on the touch event's time, add a small latency offset (or a calibration
+     setting); labels always consistent with the result.
+   - Fix CPU failure modes before adding features (P5): runners always tag up and get back on fly balls, never
+     overrun a bag by themselves, CPU steals only in sensible counts; highlight the fielder holding the ball.
+   - Deeper duel without new buttons (P6): count-aware CPU pitching and batting (take 3-0, protect with two strikes,
+     chase pitches with two strikes), aiming at a corner tightens the meter band, a missed meter gives a visible
+     hanging pitch over the plate, breaks happen late. (Also the answer to "Easy was too easy".)
+   - Optional power swing (P7): tap = contact, hold and release = power with a narrower PERFECT window.
+   - Cut dead time (P9): tap to skip celebrations and slow motion, quick transitions.
+   Then: art style sample for approval, players and animations, ballparks, chiptune music; title, settings and
+   pause screens with first-game one-line hints (P8).
+4. **The road trip.** 8 cities, 3 real games each, the boss game after the first two, one short skippable scene on
+   arrival and one after the boss, no quests between games (P10). Fixed, capped stat points per win, one recruit
+   from the city after the boss, a bonus for a city goal or a big win; upgrades visibly change the cards (P11).
+   Bosses with one learnable habit and a visible tell, the final boss mixing them (P12). One twist per ballpark,
+   explained in one line before the game, each bending one variable (P13). The Hoops crew with distinct looks and
+   one-line personalities; their friendships become small chemistry bonuses (P14). Text-caption commentary from a
+   home-town announcer who roots for the locals, many short lines with no repeats (P15). The Iowa finale, saving.
+5. **Release.** Difficulty and accessibility pass (P16): Easy adds assists such as a pitch-type hint, Hard removes
+   them; maybe separate batting and pitching levels; no always-on adaptive difficulty; every colour cue also has a
+   shape or label; large text. How to Play pages, itch.io web build beside the Android APK, replay any city and a
+   harder New Game Plus after the campaign (P17).
+
+**Not to build** (research): a throw meter, manual fielder movement or per-runner control, currencies, card
+packs, energy or timers, several gimmicks in one park, quests between games.
 
 ## Open questions (ask at the right phase)
 - The six new teammates beside Deuce, Jojo and Tank (names, looks, positions): Phase 3/4.
 - Exact cities and twists: Phase 4.
-- Whether Home Run Derby has its own unlocks: Phase 2.
