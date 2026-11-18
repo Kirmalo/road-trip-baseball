@@ -71,7 +71,7 @@ func launch(from: Vector2, z0: float, v: Vector2, vz: float, fly_out_ok: bool, f
 	position = from
 	z = z0
 
-func throw_ball(from_p, to_p, to: Vector2) -> void:
+func throw_ball(from_p, to_p, to: Vector2, speed := 0.0) -> void:
 	state = THROWN
 	thrower = from_p
 	receiver = to_p
@@ -80,7 +80,7 @@ func throw_ball(from_p, to_p, to: Vector2) -> void:
 	throw_to = to
 	throw_t = 0.0
 	var d := throw_from.distance_to(to)
-	throw_dur = maxf(0.15, d / game.THROW_SPEED)
+	throw_dur = maxf(0.15, d / (speed if speed > 0.0 else game.THROW_SPEED))
 	throw_peak = d * 0.05
 	can_fly_out = false
 

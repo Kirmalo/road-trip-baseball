@@ -6,6 +6,8 @@ signal a_pressed
 signal a_released
 signal b_pressed
 signal base_pressed(b: int)
+signal pitch_pressed(k: int)
+signal small_pressed(id: String)
 
 var joy_index := -1
 var joy_center := Vector2.ZERO
@@ -18,8 +20,11 @@ var a_text := "SWING"
 var b_text := "BUNT"
 var show_bases := false       # set by the game while you hold the ball in the field
 var base_hint := -1           # the base the CPU would throw to (drawn brighter)
-const BASE_R := 46.0
+const BASE_R := 44.0
 const BASE_LABELS := ["HOME", "1B", "2B", "3B"]
+var pitch_names: Array = []   # non-empty while you pick a pitch: a fan of pitch buttons (same spots as the bases)
+var small: Array = []         # small round buttons in a column: [id, label ("\n" = two lines), highlighted]
+const SMALL_R := 34.0
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -39,22 +44,34 @@ func b_center() -> Vector2:
 
 func base_center(b: int) -> Vector2:
 	# a small diamond of buttons near the right thumb, laid out like the field
-	var c := Vector2(size.x - 175, size.y - 165)
+	var c := Vector2(size.x - 170, size.y - 160)
 	match b:
 		1:
-			return c + Vector2(95, 0)
+			return c + Vector2(90, 0)
 		2:
-			return c + Vector2(0, -95)
+			return c + Vector2(0, -88)
 		3:
-			return c + Vector2(-95, 0)
-	return c + Vector2(0, 95)
+			return c + Vector2(-90, 0)
+	return c + Vector2(0, 88)
+
+func small_center(i: int) -> Vector2:
+	return Vector2(size.x - 390, size.y - 62 - i * 78)
 
 func _input(event: InputEvent) -> void:
 	if not visible:
 		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			if show_bases:
+			for i in small.size():
+				if event.position.distance_to(small_center(i)) < SMALL_R + 6.0:
+					small_pressed.emit(small[i][0])
+					return
+			if not pitch_names.is_empty():
+				for k in pitch_names.size():
+					if event.position.distance_to(base_center(k)) < BASE_R + 8.0:
+						pitch_pressed.emit(k)
+						return
+			elif show_bases:
 				for b in 4:
 					if event.position.distance_to(base_center(b)) < BASE_R + 8.0:
 						base_pressed.emit(b)
@@ -96,8 +113,22 @@ func _draw() -> void:
 		var hint := Vector2(150, size.y - 150)
 		draw_arc(hint, JOY_RADIUS, 0, TAU, 48, Color(1, 1, 1, 0.25), 3.0)
 		draw_circle(hint, 34.0, Color(1, 1, 1, 0.18))
+	for i in small.size():
+		var it: Array = small[i]
+		var col := Color(0.15, 0.6, 0.25, 0.95) if it[2] else Color(0.35, 0.35, 0.42, 0.85)
+		draw_circle(small_center(i), SMALL_R, col)
+		draw_arc(small_center(i), SMALL_R, 0, TAU, 32, Color(1, 1, 1, 0.8), 2.5)
+		var lines: PackedStringArray = String(it[1]).split("\n")
+		for j in lines.size():
+			_label(small_center(i) + Vector2(0, 6 + (j - (lines.size() - 1) / 2.0) * 17), lines[j], 15, Color.WHITE)
+	if not pitch_names.is_empty():
+		_label(base_center(0) + Vector2(0, -82), "PITCH", 18, Color(1, 1, 1, 0.9))
+		var cols := [Color(0.85, 0.3, 0.15, 0.9), Color(0.2, 0.55, 0.3, 0.9), Color(0.45, 0.3, 0.75, 0.9), Color(0.15, 0.45, 0.75, 0.9)]
+		for k in pitch_names.size():
+			_button(base_center(k), BASE_R, pitch_names[k], cols[k % 4], 18)
+		return
 	if show_bases:
-		var c := base_center(0) + Vector2(0, -95)
+		var c := base_center(0) + Vector2(0, -88)
 		var pts := PackedVector2Array([base_center(0), base_center(1), base_center(2), base_center(3), base_center(0)])
 		draw_polyline(pts, Color(1, 1, 1, 0.35), 4.0)
 		_label(c + Vector2(0, 6), "THROW", 18, Color(1, 1, 1, 0.9))
@@ -115,10 +146,10 @@ func _draw() -> void:
 	else:
 		draw_arc(b_center(), 58.0, 0, TAU, 48, Color(1, 1, 1, 0.2), 2.0)
 
-func _button(c: Vector2, r: float, text: String, col: Color) -> void:
+func _button(c: Vector2, r: float, text: String, col: Color, fs := 22) -> void:
 	draw_circle(c, r, col)
 	draw_arc(c, r, 0, TAU, 48, Color(1, 1, 1, 0.8), 3.0)
-	_label(c + Vector2(0, 22 * 0.35), text, 22, Color.WHITE)
+	_label(c + Vector2(0, fs * 0.35), text, fs, Color.WHITE)
 
 func _label(at: Vector2, text: String, fs: int, col: Color) -> void:
 	var font := ThemeDB.fallback_font

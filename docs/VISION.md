@@ -68,6 +68,16 @@ city, to reach a tournament at a ballpark in the Iowa cornfields. Played by touc
 | 3/4 check | "The angle is better" |
 | Phase 1 check-in | Play camera, base-button throwing with the 2.5 s auto-throw, and the pitch meter: all good as is. Easy was too easy, because of hitting: every level's swing window and PERFECT zone tightened (Easy 0.17 -> 0.145 s, Normal 0.135 -> 0.12 s, Hard 0.10 -> 0.095 s; PERFECT share 0.35/0.28/0.22 -> 0.28/0.24/0.2) |
 
+## Phase 2 plan answers
+| Topic | Decision |
+|---|---|
+| Picking a pitch | A button per pitch: FAST / CHANGE are replaced by 2-4 round buttons in a fan (the pitcher's pitches); tap one, then stop the meter |
+| Stealing | A small STEAL button before the pitch when a runner can steal; the lead runner goes on the pitch |
+| Pickoffs | Small 1B / 2B buttons beside the pitch buttons for occupied bases; runners with big leads (about to steal) can be picked off. The CPU throws over too |
+| Ratings | Small cards during each at-bat: batter CONTACT / POWER / SPEED, pitcher VELOCITY / CONTROL and a stamina bar; ratings really change play |
+| Home Run Derby | A HOME RUN DERBY button on the start / after-game panel; 10 outs, any swing that isn't a homer is an out; best score remembered (team default, no unlocks) |
+| Relievers | A NEW ARM button appears when your pitcher is tired (team default); the CPU changes its own pitcher. Fatigue sized for 3-inning games |
+
 ## Draft route (open to change at the Phase 4 check-in)
 Hometown (Indiana sandlot) -> St. Louis -> Kansas City -> Chicago -> Boston -> Denver (thin air) -> San Diego ->
 Iowa cornfield tournament. Real city names; no real ballparks, teams, players, logos or brands.

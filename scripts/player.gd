@@ -39,6 +39,16 @@ var run_delay := 0.0
 var swing_t := -1.0
 var bunting := false
 
+# ratings (ratings.gd) and what they mean here
+var r: Dictionary = {}
+var run_speed := 27.0 * 4.0
+var stealing := false      # running on the pitch
+var steal_intent := false  # will run on this pitch (bigger lead: easier to pick off)
+
+# diving
+var dive_t := 0.0
+var dive_dir := Vector2.RIGHT
+
 # drawing
 var stride := 0.0          # running animation phase
 var last_pos := Vector2.ZERO
@@ -59,13 +69,21 @@ func setup(g, t: int, i: int, tex: Texture2D) -> void:
 func is_safe() -> bool:
 	return on_base >= 1 and seg_t <= 0.0 and run_delay <= 0.0
 
+func set_ratings(rr: Dictionary) -> void:
+	r = rr
+	run_speed = game.Ratings.run_speed_ft(float(r["speed"])) * game.FT
+
 func update(delta: float, human: bool, input_vec: Vector2) -> void:
 	catch_cooldown = maxf(0.0, catch_cooldown - delta)
 	match mode:
 		FIELDER:
-			_fielder_update(delta, human, input_vec)
+			if dive_t > 0.0:
+				dive_t -= delta
+				velocity = Vector2.ZERO
+			else:
+				_fielder_update(delta, human, input_vec)
 		RUNNER:
-			if game.phase == game.LIVE:
+			if game.phase == game.LIVE or (game.phase == game.PITCHING and stealing):
 				_runner_update(delta)
 		BATTER:
 			if swing_t >= 0.0:
@@ -109,7 +127,7 @@ func _runner_update(delta: float) -> void:
 		return
 	var a: Vector2 = game.base_pos(on_base)
 	var b: Vector2 = game.base_pos(on_base + 1)
-	var step: float = game.RUN_SPEED * delta / a.distance_to(b)
+	var step: float = run_speed * delta / a.distance_to(b)
 	if goal > on_base:
 		if not (halfway and seg_t >= 0.25):
 			seg_t += step
@@ -150,7 +168,14 @@ func _draw() -> void:
 			var tip := dir * 40.0
 			draw_line(dir * 22.0, tip, c, 4.0)
 			draw_colored_polygon(PackedVector2Array([tip + dir * 10.0, tip + dir.orthogonal() * 7.0, tip - dir.orthogonal() * 7.0]), c)
-	if View.angled():
+	if View.angled() and dive_t > 0.0:
+		# lying stretched out: rotate in screen-like coordinates, then undo the world's squash
+		var side := -1.0 if dive_dir.x < 0.0 else 1.0
+		var m := Transform2D(Vector2(1, 0), Vector2(0, 1.0 / View.tilt()), Vector2.ZERO) * Transform2D(side * 1.45, Vector2(side * 8, -4))
+		draw_set_transform_matrix(m)
+		_draw_figure()
+		draw_set_transform(Vector2.ZERO, 0, View.upright())
+	elif View.angled():
 		draw_set_transform(Vector2.ZERO, 0, View.upright())
 		_draw_figure()
 	elif mode == BATTER:

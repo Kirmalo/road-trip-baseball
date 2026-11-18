@@ -10,7 +10,8 @@ const ZY := 75.0   # half height
 const MAP_SCALE := 0.36        # mini-map pixels per foot
 const MAP_W := 180.0
 const MAP_H := 160.0
-const RING_SPEED := 160.0      # how fast the timing ring closes, pixels per second
+const RING_START := 62.0       # the timing ring's size (beyond the ball) when it appears
+const RING_TIME := 0.45        # seconds before the moment to swing that it appears and starts closing
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -21,6 +22,8 @@ func _process(_delta: float) -> void:
 
 func _draw() -> void:
 	_draw_minimap()
+	if (game.phase == game.PRE_PITCH or game.phase == game.PITCHING) and game.batter != null:
+		_draw_cards()
 	if game.phase == game.PRE_PITCH or game.phase == game.PITCHING or game.zone_show > 0.0 or game.swing_text_timer > 0.0:
 		_draw_zone()
 	elif game.phase == game.LIVE:
@@ -95,19 +98,50 @@ func _draw_minimap() -> void:
 		draw_circle(p, 5.5, Color(0.95, 0.25, 0.2) if i < game.outs else Color(1, 1, 1, 0.15))
 		draw_arc(p, 5.5, 0, TAU, 12, Color.WHITE, 1.2)
 
+# ---------------- rating cards ----------------
+
+func _draw_cards() -> void:
+	var font := ThemeDB.fallback_font
+	var y := size.y - 112
+	var br: Dictionary = game.batter.r
+	var bx := size.x / 2 - 290
+	_card(Rect2(bx, y, 230, 96), Color(0.2, 0.45, 1.0) if game.batting == 0 else Color(0.95, 0.25, 0.2))
+	_text_left(font, "AT BAT  #%d  %s" % [int(br["number"]), game.POS_NAMES[game.batter.role]], Vector2(bx + 10, y + 22), 17)
+	_bar(font, "CON", br["contact"], Vector2(bx + 10, y + 42))
+	_bar(font, "POW", br["power"], Vector2(bx + 10, y + 62))
+	_bar(font, "SPD", br["speed"], Vector2(bx + 10, y + 82))
+	var pr: Dictionary = game.pitcher_r()
+	var px := size.x / 2 - 50
+	_card(Rect2(px, y, 230, 96), Color(0.2, 0.45, 1.0) if game.fielding == 0 else Color(0.95, 0.25, 0.2))
+	_text_left(font, "PITCHER  #%d   %d P" % [int(pr["number"]), int(pr["pitch_count"])], Vector2(px + 10, y + 22), 17)
+	_bar(font, "VEL", pr["velocity"], Vector2(px + 10, y + 42))
+	_bar(font, "CTL", pr["control"], Vector2(px + 10, y + 62))
+	var e: float = game.pitcher_energy()
+	var ecol := Color(0.3, 0.9, 0.4) if e > 0.5 else (Color(1, 0.8, 0.2) if e > 0.25 else Color(1, 0.3, 0.25))
+	_bar(font, "ARM", e * 100.0, Vector2(px + 10, y + 82), ecol)
+
+func _card(r: Rect2, team_col: Color) -> void:
+	draw_rect(r, Color(0.05, 0.06, 0.09, 0.82))
+	draw_rect(Rect2(r.position, Vector2(5, r.size.y)), team_col)
+
+func _bar(font: Font, label: String, v: float, at: Vector2, col := Color(0.95, 0.8, 0.3)) -> void:
+	_text_left(font, label, at, 14)
+	var x0 := at.x + 42
+	draw_rect(Rect2(x0, at.y - 10, 150, 10), Color(1, 1, 1, 0.12))
+	draw_rect(Rect2(x0, at.y - 10, 150 * clampf(v / 100.0, 0.0, 1.0), 10), col)
+
 # ---------------- strike zone panel ----------------
 
 func zone_center() -> Vector2:
-	return Vector2(size.x - 210, 320)
+	return Vector2(size.x - 210, 268)
 
 func _pitch_screen_pos(pc: Vector2, p: float) -> Vector2:
 	# where the incoming pitch is drawn in the panel at progress p (0 = release, 1 = at the plate)
 	var start := pc + Vector2(-0.15 * ZX, -1.6 * ZY)
 	var fin: Vector2 = pc + game.pitch_loc * Vector2(ZX, ZY)
-	var bp := start.lerp(fin, p)
-	if game.pitch_type == game.CHANGEUP:
-		bp.y -= p * (1.0 - p) * ZY * 0.9   # floats, then drops in late
-	return bp
+	# it travels toward where it looks like it's going, then breaks late
+	var brk: Vector2 = game.pitch_brk * Vector2(ZX, ZY)
+	return start.lerp(fin - brk, p) + brk * pow(p, 3.0)
 
 func _draw_zone() -> void:
 	var pc := zone_center()
@@ -133,7 +167,7 @@ func _draw_zone() -> void:
 		draw_line(a - Vector2(0, 18), a + Vector2(0, 18), Color(1, 0.3, 0.25), 2.0)
 		if game.meter_active:
 			_draw_meter(pc + Vector2(0, 112))
-			_text(font, "TAP TO STOP IN THE GREEN", pc + Vector2(0, 140), 17)
+			_text(font, "%s: STOP IN THE GREEN" % game.Ratings.PITCH_LONG[game.pitch_type], pc + Vector2(0, 140), 16)
 		else:
 			_text(font, "AIM, THEN PICK A PITCH", pc + Vector2(0, 135), 18)
 		return
@@ -147,7 +181,7 @@ func _draw_zone() -> void:
 		if game.human_batting() and game.phase == game.PITCHING and not game.swung:
 			var left: float = (game.pitch_dur - game.SWING_DELAY) - game.pitch_clock
 			var window: float = game._contact_window(false)
-			var rr := r + 4.0 + maxf(0.0, left) * RING_SPEED
+			var rr := r + 4.0 + RING_START * clampf(left / RING_TIME, 0.0, 1.0)   # appears, then closes steadily
 			var col := Color(1, 1, 1, 0.85)
 			if absf(left) <= window * game._perfect_frac():
 				col = Color(0.3, 1.0, 0.4)
@@ -157,8 +191,7 @@ func _draw_zone() -> void:
 				draw_arc(bp, rr, 0, TAU, 40, col, 3.5)
 		draw_circle(bp, r + 1.5, Color(0, 0, 0, 0.6))
 		draw_circle(bp, r, Color(0.98, 0.97, 0.92))
-		var pname := "FASTBALL" if game.pitch_type == game.FASTBALL else "CHANGEUP"
-		_text(font, "%s  %d MPH" % [pname, game.pitch_mph], pc + Vector2(0, 135), 18)
+		_text(font, "%s  %d MPH" % [game.Ratings.PITCH_LONG[game.pitch_type], game.pitch_mph], pc + Vector2(0, 135), 18)
 	elif game.phase == game.PRE_PITCH and game.human_batting():
 		_text(font, "TAP SWING WHEN THE RING CLOSES", pc + Vector2(0, 128), 16)
 		_text(font, "stick UP = fly ball   DOWN = grounder", pc + Vector2(0, 146), 14)
@@ -174,7 +207,7 @@ func _draw_zone() -> void:
 
 func _draw_meter(c: Vector2) -> void:
 	var w := 200.0
-	var green: float = game.Difficulty.value(game.level, "meter_green")
+	var green: float = game.meter_green()
 	draw_rect(Rect2(c - Vector2(w / 2, 9), Vector2(w, 18)), Color(0.75, 0.2, 0.15, 0.9))
 	draw_rect(Rect2(c - Vector2(w / 2 * 0.6, 9), Vector2(w * 0.6, 18)), Color(0.9, 0.7, 0.15, 0.9))
 	draw_rect(Rect2(c - Vector2(w / 2 * green, 9), Vector2(w * green, 18)), Color(0.2, 0.85, 0.3))

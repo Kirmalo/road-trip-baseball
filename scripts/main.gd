@@ -18,6 +18,7 @@ const ControlsScript = preload("res://scripts/touch_controls.gd")
 const HudScript = preload("res://scripts/hud.gd")
 const Difficulty = preload("res://scripts/difficulty.gd")
 const View = preload("res://scripts/view.gd")
+const Ratings = preload("res://scripts/ratings.gd")
 
 const FT := 4.0                       # pixels per foot
 const INNINGS := 3                    # innings per game (change to make games longer)
@@ -48,6 +49,16 @@ enum { PRE_PITCH, PITCHING, LIVE, PAUSE, OVER }
 enum { RUN_AUTO, RUN_GO, RUN_HOLD }
 const FASTBALL := 0
 const CHANGEUP := 1
+const CURVE := 2
+const SLIDER := 3
+# how each pitch moves late (zone half-widths at a 60 rating), how much slower it is, how it fools a hitter
+const BREAK := [Vector2(0, 0), Vector2(0, 0.35), Vector2(0.25, 0.55), Vector2(0.55, 0.15)]
+const SLOWER := [0.0, 0.25, 0.2, 0.08]
+const MPH_LESS := [0, 10, 13, 6]
+const FOOL := [0.0, 0.05, 0.04, 0.02]
+const DIVE_REACH := 9.0 * FT          # a diving fielder can reach this far
+const DERBY_OUTS := 10
+const RELIEF_AT := 0.5                 # you can bring in a reliever once your pitcher's energy drops below this
 
 # fielding spots in feet: P, C, 1B, 2B, SS, 3B, LF, CF, RF
 const POS_NAMES := ["P", "C", "1B", "2B", "SS", "3B", "LF", "CF", "RF"]
@@ -76,6 +87,23 @@ var outs := 0
 var balls := 0
 var strikes := 0
 var lineup := [0, 0]
+var team_data := [{}, {}]              # Ratings.make_team(): "players" (by role) and "staff" (starter + 2 relievers)
+var pitcher_idx := [0, 0]              # which of the staff is pitching
+var pitch_brk := Vector2.ZERO           # this pitch's late break (zone units), for the panel
+
+# steals, pickoffs and other plays that aren't a ball in play
+var special_play := ""                 # "steal" or "pickoff" while one runs as a live play
+var special_after := "pitch"
+var steal_on := false                  # you pressed STEAL for this pitch
+var pickoff_tried := false
+var slowmo_left := 0.0
+
+# Home Run Derby
+static var next_mode := ""             # "derby": the next scene load starts a derby (survives reload)
+var derby := false
+var derby_hr := 0
+var derby_outs := 0
+var derby_last_hr := false
 var batter = null
 var batter_runner = null
 var runners: Array = []
@@ -129,6 +157,7 @@ var cover: Array = []
 var second_cover := 3
 var run_mode := RUN_AUTO
 var hr_called := false
+var robbed_checked := false
 var settle_timer := 0.0
 var runs_this_play := 0
 var outs_this_play := 0
@@ -151,6 +180,9 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	autoplay = args.has("--autoplay")
 	humantest = args.has("--humantest")
+	derby = args.has("--derby") or next_mode == "derby"
+	next_mode = ""
+	Engine.time_scale = 1.0
 	testing = not args.is_empty()
 	level = Difficulty.from_args(args, Difficulty.NORMAL if testing else Difficulty.load_level())
 	View.from_args(args)
@@ -169,11 +201,13 @@ func _ready() -> void:
 	world.add_child(marker)
 
 	for t in 2:
+		team_data[t] = Ratings.make_team(t)
 		for i in 9:
 			var p = PlayerScript.new()
 			var color := "blue" if t == 0 else "red"
 			p.setup(self, t, i, load("res://assets/%s_%d.png" % [color, i % 5 + 1]))
 			world.add_child(p)
+			p.set_ratings(team_data[t]["players"][i])
 			players.append(p)
 			teams[t].append(p)
 
@@ -188,9 +222,12 @@ func _ready() -> void:
 	camera.make_current()
 
 	_build_hud()
-	_start_half()
-	if not testing:
-		_open_menu("ROAD TRIP BASEBALL", "PICK A LEVEL")
+	if derby:
+		_start_derby()
+	else:
+		_start_half()
+		if not testing:
+			_open_menu("ROAD TRIP BASEBALL", "PICK A LEVEL")
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -232,6 +269,8 @@ func _build_hud() -> void:
 	controls.a_pressed.connect(_on_a_pressed)
 	controls.b_pressed.connect(_on_b_pressed)
 	controls.base_pressed.connect(_on_base_pressed)
+	controls.pitch_pressed.connect(_on_pitch_pressed)
+	controls.small_pressed.connect(_on_small_pressed)
 	if autoplay:
 		controls.visible = false
 
@@ -286,7 +325,26 @@ func _open_menu(title: String, sub: String) -> void:
 	hint.text = "Easy: big timing windows.  Hard: a sharp CPU and tight timing."
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(hint)
+	var d := Button.new()
+	d.text = "HOME RUN DERBY"
+	d.custom_minimum_size = Vector2(320, 70)
+	d.add_theme_font_size_override("font_size", 26)
+	var dsb := StyleBoxFlat.new()
+	dsb.bg_color = Color(0.85, 0.55, 0.1)
+	dsb.set_corner_radius_all(14)
+	dsb.border_color = Color(1, 1, 1, 0.7)
+	dsb.set_border_width_all(2)
+	d.add_theme_stylebox_override("normal", dsb)
+	d.add_theme_stylebox_override("hover", dsb)
+	d.add_theme_stylebox_override("pressed", dsb)
+	d.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	d.pressed.connect(_on_derby_chosen)
+	box.add_child(d)
 	controls.get_parent().add_child(menu)
+
+func _on_derby_chosen() -> void:
+	next_mode = "derby"
+	get_tree().reload_current_scene()
 
 func _on_level_chosen(k: int) -> void:
 	level = k
@@ -367,6 +425,7 @@ func _start_half() -> void:
 	batting = 0 if top else 1
 	fielding = 1 - batting
 	outs = 0
+	special_play = ""
 	for r in runners:
 		r.mode = PlayerScript.OFF
 		r.visible = false
@@ -397,7 +456,7 @@ func _ordinal(n: int) -> String:
 	return "%dTH" % n
 
 func _new_batter() -> void:
-	batter = teams[batting][lineup[batting]]
+	batter = teams[batting][Ratings.ORDER[lineup[batting]]]
 	lineup[batting] = (lineup[batting] + 1) % 9
 	batter.mode = PlayerScript.BATTER
 	batter.visible = true
@@ -406,8 +465,12 @@ func _new_batter() -> void:
 	batter.swing_t = -1.0
 	batter.bunting = false
 	batter.trot = false
+	batter.stealing = false
+	batter.steal_intent = false
 	balls = 0
 	strikes = 0
+	if not human_pitching() and not derby and pitcher_energy() < 0.15 and pitcher_idx[fielding] < 2:
+		_change_pitcher()
 
 func _begin_pitch() -> void:
 	phase = PRE_PITCH
@@ -433,15 +496,181 @@ func _begin_pitch() -> void:
 		f.facing = (Vector2(0, -30 * FT) - f.position).angle()
 	_pitcher().facing = PI / 2
 	_catcher().facing = -PI / 2
+	steal_on = false
+	pickoff_tried = false
+	if base_occupied(1):
+		var fb = teams[fielding][2]   # the first baseman holds the runner
+		fb.position = base_pos(1) + Vector2(-1, -5) * FT
+		fb.target = fb.position
+	if base_occupied(2):
+		var ss = teams[fielding][4]   # the shortstop cheats toward second
+		ss.position = Vector2(-14, -122) * FT
+		ss.target = ss.position
 	for r in runners:
-		r.seg_t = 0.0
-		r.goal = r.on_base
-		r.position = base_pos(r.on_base)
-		r.facing = (base_pos(r.on_base + 1) - r.position).angle()
+		r.stealing = false
+		r.steal_intent = false
+	if not human_batting() and not derby:
+		var c = _steal_candidate()
+		if c != null:
+			var p := clampf((float(c.r["speed"]) - 50.0) / 90.0, 0.0, 0.3)
+			if c.on_base == 2:
+				p *= 0.5
+			if outs == 2:
+				p *= 0.7
+			c.steal_intent = rng.randf() < p
+	_set_leads()
 	ball.hold(_pitcher())
+
+func _steal_candidate():
+	# the lead runner who has an empty base in front of him (steals of second and third)
+	var best = null
+	for r in runners:
+		if r.on_base >= 1 and r.on_base <= 2 and not base_occupied(r.on_base + 1):
+			if best == null or r.on_base > best.on_base:
+				best = r
+	return best
+
+func _set_leads() -> void:
+	for r in runners:
+		var lead := 0.05 if r.on_base == 3 else 0.07
+		if r.steal_intent:
+			lead = 0.16
+		r.seg_t = lead
+		r.goal = r.on_base
+		r.position = base_pos(r.on_base).lerp(base_pos(r.on_base + 1), lead)
+		r.facing = (base_pos(r.on_base + 1) - r.position).angle()
+
+func _start_steals() -> void:
+	for r in runners:
+		if r.steal_intent:
+			r.stealing = true
+			r.goal = r.on_base + 1
+			r.seg_t = maxf(r.seg_t, 0.2)
+			r.run_delay = 0.0
+			stat("steal_att")
+			show_message("HE'S RUNNING!", 0.8)
+
+func _change_pitcher() -> void:
+	pitcher_idx[fielding] += 1
+	stat("relievers")
+	show_message("NEW PITCHER: #%d" % int(pitcher_r()["number"]), 1.4)
+
+func _start_special(kind: String, after: String) -> void:
+	# a live play without a batted ball: the catcher's throw on a steal, or a pickoff throw
+	special_play = kind
+	special_after = after
+	phase = LIVE
+	play_timer = 0.0
+	chase_timer = 0.0
+	runs_this_play = 0
+	outs_this_play = 0
+	error_this_play = false
+	run_mode = RUN_AUTO
+	hr_called = false
+	settle_timer = 0.0
+	chaser = null
+	batter_runner = null
+	second_cover = 4
+	cam_follow = true
+	for r in runners:
+		r.forced = false
+		r.retouch = false
+		r.trot = false
+		r.halfway = false
+		r.keep_going = false
+		r.start_base = r.on_base
+		if not r.stealing:
+			r.goal = r.on_base
+	cover = _coverage()
+
+func _pickoff(b: int) -> void:
+	var target = null
+	for r in runners:
+		if r.on_base == b:
+			target = r
+	if target == null or phase != PRE_PITCH or meter_active:
+		return
+	_start_special("pickoff", "pitch")
+	target.run_delay = 0.35 if target.steal_intent else 0.15   # leaning toward the next base: slow to get back
+	for r in runners:
+		r.steal_intent = false
+	stat("pickoff_att")
+	show_message("PICKOFF THROW!", 0.8)
+	_throw_to(_pitcher(), cover[b], base_pos(b))
+
+func _slowmo(sec: float) -> void:
+	if testing:
+		return
+	Engine.time_scale = 0.35
+	slowmo_left = sec
+
+func _process(delta: float) -> void:
+	if slowmo_left > 0.0:
+		slowmo_left -= delta / maxf(Engine.time_scale, 0.01)
+		if slowmo_left <= 0.0:
+			Engine.time_scale = 1.0
+
+# ---------------- home run derby ----------------
+
+func _start_derby() -> void:
+	top = true
+	batting = HUMAN_TEAM
+	fielding = 1 - HUMAN_TEAM
+	outs = 0
+	for p in teams[fielding]:
+		p.mode = PlayerScript.FIELDER
+		p.visible = true
+		p.position = p.home_spot
+		p.target = p.home_spot
+	for p in teams[batting]:
+		p.mode = PlayerScript.OFF
+		p.visible = false
+	batter = teams[batting][2]   # the cleanup hitter
+	batter.mode = PlayerScript.BATTER
+	batter.visible = true
+	derby_hr = 0
+	derby_outs = 0
+	ball.hold(_pitcher())
+	show_message("HOME RUN DERBY\nAny swing that isn't a homer is an out", 2.2)
+	phase = PAUSE
+	pause_timer = 2.2
+	after_pause = "pitch"
+
+func _derby_result() -> void:
+	if derby_last_hr:
+		derby_hr += 1
+		stat("hr")
+		show_message("HOME RUN!  %d" % derby_hr, 1.0)
+	else:
+		derby_outs += 1
+		show_message("OUT  %d / %d" % [derby_outs, DERBY_OUTS], 1.0)
+	if derby_outs >= DERBY_OUTS:
+		_derby_end()
+		return
+	phase = PAUSE
+	pause_timer = 1.0
+	after_pause = "pitch"
+
+func _derby_end() -> void:
+	game_over = true
+	phase = OVER
+	var cfg := ConfigFile.new()
+	cfg.load(Difficulty.PATH)
+	var best := int(cfg.get_value("derby", "best", 0))
+	if derby_hr > best and not testing:
+		cfg.set_value("derby", "best", derby_hr)
+		cfg.save(Difficulty.PATH)
+	best = maxi(best, derby_hr)
+	if testing:
+		print("DERBY %d home runs" % derby_hr)
+		print(stats)
+		get_tree().quit()
+		return
+	_open_menu("HOME RUN DERBY:  %d HOME RUNS" % derby_hr, "BEST %d.   PLAY AGAIN:" % best)
 
 func _end_half() -> void:
 	phase = PAUSE
+	special_play = ""
 	if autoplay or humantest:
 		print("End of %s %d: BLUE %d - RED %d" % ["top" if top else "bottom", inning, score[0], score[1]])
 	show_message("3 OUTS\nSIDE RETIRED", 1.8)
@@ -489,6 +718,35 @@ func _game_end() -> void:
 func _cpu_level() -> int:
 	return Difficulty.NORMAL if autoplay else level
 
+func pitcher_r() -> Dictionary:
+	return team_data[fielding]["staff"][pitcher_idx[fielding]]
+
+func pitcher_energy() -> float:
+	return Ratings.energy(pitcher_r())
+
+func pitch_menu() -> Array:
+	# the pitch types this pitcher throws, fastball first
+	var out := []
+	for t in [FASTBALL, CHANGEUP, CURVE, SLIDER]:
+		if pitcher_r()["pitches"].has(t):
+			out.append(t)
+	return out
+
+func _pitch_rating(t: int) -> float:
+	return float(pitcher_r()["pitches"].get(t, 40))
+
+func _cpu_pick_pitch() -> int:
+	var menu_t := pitch_menu()
+	if rng.randf() < 0.5 or balls == 3:
+		return FASTBALL
+	return menu_t[rng.randi() % menu_t.size()]
+
+func meter_green() -> float:
+	# your pitch meter's green zone: the level, the pitcher's control, and how tired he is
+	var e := pitcher_energy()
+	var c := float(pitcher_r()["control"])
+	return Difficulty.value(level, "meter_green") * (0.75 + c * 0.005) * (0.6 + 0.4 * minf(1.0, e * 2.0))
+
 func _throw_pitch(type: int) -> void:
 	if phase != PRE_PITCH or meter_active:
 		return
@@ -500,14 +758,18 @@ func _throw_pitch(type: int) -> void:
 		meter_pos = -1.0
 		return
 	var lv := _cpu_level()
-	_deliver_pitch(_cpu_pitch_target(lv) + _gauss2(Difficulty.value(lv, "cpu_scatter")))
+	var e := pitcher_energy()
+	var scatter := Difficulty.value(lv, "cpu_scatter") * (1.5 - float(pitcher_r()["control"]) / 100.0)
+	if e < 0.5:
+		scatter *= 1.0 + (0.5 - e) * 1.6
+	_deliver_pitch(_cpu_pitch_target(lv) + _gauss2(scatter))
 
 func _release_meter() -> void:
 	if not meter_active:
 		return
 	meter_active = false
 	var off := absf(meter_pos)
-	var green := Difficulty.value(level, "meter_green")
+	var green := meter_green()
 	var scatter := 0.05
 	if off <= green:
 		show_message("ON TARGET", 0.7)
@@ -517,22 +779,28 @@ func _release_meter() -> void:
 	_deliver_pitch(aim + _gauss2(scatter))
 
 func _deliver_pitch(loc: Vector2) -> void:
+	var pr := pitcher_r()
+	var e := pitcher_energy()
 	pitch_loc = loc
-	if pitch_type == FASTBALL:
-		pitch_dur = rng.randf_range(0.8, 0.9)
-		pitch_mph = int(lerpf(95.0, 88.0, (pitch_dur - 0.8) / 0.1))
-	else:
-		pitch_dur = rng.randf_range(1.05, 1.15)
-		pitch_mph = int(lerpf(82.0, 76.0, (pitch_dur - 1.05) / 0.1))
+	pitch_brk = BREAK[pitch_type] * (_pitch_rating(pitch_type) / 60.0)
+	var vel := float(pr["velocity"])
+	var fb_dur := lerpf(0.92, 0.76, vel / 100.0) + (1.0 - e) * 0.08
+	pitch_dur = fb_dur + SLOWER[pitch_type] + rng.randf_range(-0.02, 0.02)
+	pitch_mph = int(84.0 + vel * 0.14 - (1.0 - e) * 5.0) - MPH_LESS[pitch_type] + rng.randi_range(-1, 1)
+	pr["pitch_count"] = int(pr["pitch_count"]) + 1
 	pitch_clock = 0.0
 	ball.start_pitch(MOUND + Vector2(-1.5 * FT, 3.0 * FT), Vector2(pitch_loc.x * 0.8 * FT, -0.8 * FT), (2.5 - pitch_loc.y) * FT)
 	phase = PITCHING
 	stat("pitches")
+	stat("pitch_" + Ratings.PITCH_NAMES[pitch_type].to_lower())
 	ht_swing_err = rng.randfn(0.0, 0.05)
+	_start_steals()
 	if not human_batting():
 		_plan_cpu_swing()
 
 func _cpu_pitch_target(lv: int) -> Vector2:
+	if derby:
+		return Vector2(rng.randf_range(-0.6, 0.6), rng.randf_range(-0.6, 0.6))
 	var strike_chance := Difficulty.value(lv, "cpu_strikes")
 	if balls == 3:
 		strike_chance = 0.8
@@ -546,20 +814,21 @@ func _plan_cpu_swing() -> void:
 	if _in_zone(pitch_loc):
 		p = Difficulty.value(lv, "cpu_zone_swing")
 	elif absf(pitch_loc.x) < 1.35 and absf(pitch_loc.y) < 1.35:
-		p = Difficulty.value(lv, "cpu_chase")
+		p = Difficulty.value(lv, "cpu_chase") * (1.0 + _pitch_rating(pitch_type) / 200.0 if pitch_type != FASTBALL else 1.0)
 	if strikes == 2:
 		p += 0.15
 	if rng.randf() >= p:
 		return
-	var te := rng.randfn(0.0, Difficulty.value(lv, "cpu_timing_sd"))
-	if pitch_type == CHANGEUP:
-		te += 0.05   # fooled a little: out in front
+	var con := float(batter.r["contact"])
+	var te := rng.randfn(0.0, Difficulty.value(lv, "cpu_timing_sd") * (1.2 - con * 0.004))
+	te += FOOL[pitch_type] * (_pitch_rating(pitch_type) / 60.0) * minf(1.0, pitcher_energy() * 2.0)   # fooled: out in front
 	cpu_swing_at = maxf(0.05, pitch_dur - SWING_DELAY - te)
 	cpu_stick = 0.0
 	var roll := rng.randf()
-	if roll < 0.12:
-		cpu_stick = 1.0
-	elif roll < 0.24:
+	var pw := float(batter.r["power"])
+	if roll < 0.06 + pw * 0.0015:
+		cpu_stick = 1.0      # power hitters try to lift it
+	elif roll < 0.2 + pw * 0.0015:
 		cpu_stick = -1.0
 
 func _contact_window(bunt: bool) -> float:
@@ -569,6 +838,8 @@ func _contact_window(bunt: bool) -> float:
 		w = BUNT_WINDOW
 	elif human_batting():
 		w = Difficulty.value(level, "swing_window")
+	if not bunt and batter != null and not batter.r.is_empty():
+		w *= Ratings.contact_mult(float(batter.r["contact"]))
 	var d := maxf(absf(pitch_loc.x), absf(pitch_loc.y))
 	if d > 1.0:
 		w *= clampf(1.0 - (d - 1.0) * 1.1, 0.25, 1.0)
@@ -614,6 +885,8 @@ func _resolve_contact() -> void:
 		spray = -contact_te / window * 25.0 + rng.randf_range(-12.0, 12.0)
 	else:
 		speed = (54.0 + 64.0 * q) * (1.0 if _in_zone(pitch_loc) else 0.85) + rng.randf_range(-6.0, 6.0)
+		speed += Ratings.power_ft(float(batter.r["power"])) - (_pitch_rating(pitch_type) - 50.0) * 0.08
+		speed += (1.0 - pitcher_energy()) * 6.0   # a tired pitcher gets hit harder
 		launch = 10.0 + rng.randfn(0.0, 15.0) - pitch_loc.y * 6.0 + contact_stick * 18.0
 		if perfect:
 			speed += 4.0
@@ -631,6 +904,13 @@ func _resolve_contact() -> void:
 	cam_last_pos = View.to_screen(Vector2(0, -60 * FT))
 	cam_last_zoom = 0.9
 	stat("contact")
+	if derby:
+		phase = PAUSE
+		derby_last_hr = fair and ball.path_hr >= 0
+		var t := float(ball.path_hr if derby_last_hr else mini(ball.path_p.size() - 1, 180)) / 60.0
+		pause_timer = clampf(t + 0.3, 1.0, 3.5)
+		after_pause = "derby"
+		return
 	if not fair:
 		stat("fouls")
 		phase = PAUSE
@@ -649,6 +929,27 @@ func _resolve_contact() -> void:
 	_start_play()
 
 func _pitch_result() -> void:
+	if derby:
+		phase = PAUSE
+		zone_show = 1.2
+		ball.hold(_catcher())
+		pause_timer = 1.0
+		after_pause = "pitch"
+		if swung:
+			derby_last_hr = false
+			_derby_result()
+		else:
+			show_message("TAKE", 0.6)
+		return
+	var stealer = null
+	for r in runners:
+		if r.stealing:
+			stealer = r
+	_pitch_count_result()
+	if stealer != null and runners.has(stealer) and stealer.stealing and phase == PAUSE and outs < 3 and not game_over:
+		_start_special("steal", after_pause)
+
+func _pitch_count_result() -> void:
 	phase = PAUSE
 	zone_show = 1.2
 	ball.hold(_catcher())
@@ -706,6 +1007,8 @@ func _place_runner(r, b: int) -> void:
 	r.goal = b
 	r.forced = false
 	r.retouch = false
+	r.stealing = false
+	r.steal_intent = false
 	r.position = base_pos(b)
 
 func _score_runner(r) -> void:
@@ -729,6 +1032,7 @@ func _start_play() -> void:
 	error_this_play = false
 	run_mode = RUN_AUTO
 	hr_called = false
+	robbed_checked = false
 	settle_timer = 0.0
 	chaser = null
 	stat("in_play")
@@ -742,9 +1046,11 @@ func _start_play() -> void:
 			if not occ[k]:
 				f = false
 		r.forced = f
-		r.goal = b + 1 if f else b
+		r.goal = b + 1 if f or r.stealing else b
 		r.keep_going = false
-		r.seg_t = 0.08 if f or outs == 2 else 0.0   # secondary lead
+		if f or outs == 2 or r.stealing:
+			r.seg_t = maxf(r.seg_t, 0.08)   # secondary lead (a stealing runner keeps his jump)
+		r.stealing = false
 		r.start_base = b
 		r.retouch = false
 		r.trot = false
@@ -795,6 +1101,11 @@ func _intercept(f) -> Array:
 	# earliest moment this fielder can be where the ball is, low enough to catch
 	var n: int = ball.path_p.size()
 	var i0: int = ball.index_now()
+	if ball.path_hr >= 0 and i0 < ball.path_hr:
+		var c: Vector2 = ball.path_p[ball.path_hr]
+		var cp := c.normalized() * (c.length() - 3.0 * FT)
+		var t_hr := float(ball.path_hr - i0) / 60.0
+		return [maxf(t_hr, run_time(f.position.distance_to(cp)) + _react(f)), cp]
 	var k := i0
 	while k < n:
 		var t := float(k - i0) / 60.0
@@ -809,9 +1120,10 @@ func _intercept(f) -> Array:
 	return [t_end, last]
 
 func _react(f) -> float:
+	var base := FIELD_REACT
 	if not autoplay and f.team != HUMAN_TEAM:
-		return Difficulty.value(level, "cpu_react")
-	return FIELD_REACT
+		base = Difficulty.value(level, "cpu_react")
+	return maxf(0.12, base + Ratings.react_offset(float(f.r["fielding"])))
 
 func run_time(d: float) -> float:
 	# time for a fielder starting from a standstill to cover d pixels
@@ -888,6 +1200,22 @@ func _check_home_run() -> void:
 		return
 	if ball.index_now() < ball.path_hr:
 		return
+	# an outfielder at the wall can leap and rob it if it barely clears
+	var cross: Vector2 = ball.path_p[ball.path_hr]
+	var hz: float = ball.path_z[maxi(ball.path_hr - 1, 0)]
+	if hz < FENCE_H + 5.0 * FT and not robbed_checked:
+		robbed_checked = true
+		for f in teams[fielding]:
+			if f.role >= 6 and f.position.distance_to(cross) < 10.0 * FT:
+				if rng.randf() < clampf(0.3 + (float(f.r["fielding"]) - 50.0) * 0.008, 0.1, 0.6):
+					f.position = cross.normalized() * (cross.length() - 3.0 * FT)
+					f.dive_t = 0.7
+					f.dive_dir = Vector2.UP
+					ball.hold(f)
+					stat("robbed")
+					_slowmo(0.8)
+					_fly_out("ROBBED A HOME RUN!")
+					return
 	hr_called = true
 	chaser = null
 	stat("hr")
@@ -906,21 +1234,52 @@ func _check_catches() -> void:
 	if ball.state == BallScript.LIVE:
 		var fly: bool = ball.can_fly_out and not ball.has_bounced()
 		for f in teams[fielding]:
-			if f.catch_cooldown > 0.0:
+			if f.catch_cooldown > 0.0 or f.dive_t > 0.0:
 				continue
-			if f.position.distance_to(ball.position) < REACH and ball.z < CATCH_Z:
+			var d: float = f.position.distance_to(ball.position)
+			if d < REACH and ball.z < CATCH_Z:
 				_field_ball(f, fly)
 				return
+			# just out of reach and getting away: dive for it
+			if f == chaser and d < DIVE_REACH and ball.z < CATCH_Z and ball.speed_now() > 25.0 * FT:
+				var i: int = ball.index_now()
+				var nxt: Vector2 = ball.path_p[mini(i + 5, ball.path_p.size() - 1)]
+				var me: Vector2 = f.position + f.velocity * (5.0 / 60.0)
+				var away: bool = me.distance_to(nxt) > REACH * 1.1 and me.distance_to(nxt) >= d - 2.0
+				var landing: bool = fly and ball.path_bounce - i < 5
+				if away or landing:
+					_dive(f, fly, d)
+					return
 	elif ball.state == BallScript.THROWN:
 		var r = ball.receiver
 		if r != null and ball.throw_t > 0.5 and r.position.distance_to(ball.position) < REACH:
 			ball.hold(r)
+
+func _dive(f, fly: bool, d: float) -> void:
+	f.dive_t = 0.9
+	f.dive_dir = (ball.position - f.position).normalized()
+	f.position += f.dive_dir * maxf(0.0, d - REACH * 0.5)
+	f.velocity = Vector2.ZERO
+	stat("dives")
+	var p := clampf(0.2 + (float(f.r["fielding"]) - 50.0) * 0.006, 0.08, 0.45)
+	if rng.randf() < p:
+		stat("dive_catch")
+		ball.hold(f)
+		f.hold_timer = -0.5   # he has to get up first
+		_slowmo(0.6)
+		if fly:
+			_fly_out("DIVING CATCH!")
+		else:
+			show_message("WHAT A STOP!", 1.0)
+	else:
+		f.catch_cooldown = 1.0
 
 func _field_ball(f, fly: bool) -> void:
 	var spd: float = ball.speed_now() / FT
 	var err := 0.01
 	if spd > 85.0 and not fly:
 		err = 0.04
+	err *= Ratings.error_mult(float(f.r["fielding"]))
 	if rng.randf() < err:
 		f.catch_cooldown = 0.8
 		ball.deflect()
@@ -932,11 +1291,11 @@ func _field_ball(f, fly: bool) -> void:
 	if fly:
 		_fly_out()
 
-func _fly_out() -> void:
+func _fly_out(msg := "CAUGHT! OUT") -> void:
 	if OS.get_cmdline_user_args().has("--debug"):
 		print("   flyout by %s at %d ft, t=%.1f" % [POS_NAMES[ball.holder.role], ball.position.length() / FT, play_timer])
 	stat("flyouts")
-	show_message("CAUGHT! OUT", 1.0)
+	show_message(msg, 1.2)
 	_remove_runner(batter_runner)
 	batter_runner = null
 	outs += 1
@@ -963,6 +1322,11 @@ func _remove_runner(r) -> void:
 	r.visible = false
 
 func on_runner_reached(r) -> void:
+	if r.stealing:
+		r.stealing = false
+		r.steal_intent = false
+		stat("sb")
+		show_message("STOLEN BASE!", 1.0)
 	if r.on_base >= 4:
 		_score_runner(r)
 		return
@@ -970,8 +1334,8 @@ func on_runner_reached(r) -> void:
 
 func _runner_time_to(r, b: int) -> float:
 	if b == r.on_base + 1:
-		return (1.0 - r.seg_t) * BASE_DIST / RUN_SPEED + r.run_delay
-	return r.seg_t * BASE_DIST / RUN_SPEED
+		return (1.0 - r.seg_t) * BASE_DIST / r.run_speed + r.run_delay
+	return r.seg_t * BASE_DIST / r.run_speed
 
 func _defense_time(target: Vector2) -> float:
 	# how soon the defense could have the ball at this spot
@@ -1042,12 +1406,13 @@ func _decide_runner(r, in_air: bool) -> void:
 		r.goal = r.on_base   # somebody is standing there: go back
 		r.keep_going = false
 		return
-	var run_t := (1.0 - float(r.seg_t)) * BASE_DIST / RUN_SPEED
+	var rs: float = r.run_speed
+	var run_t := (1.0 - float(r.seg_t)) * BASE_DIST / rs
 	if r.goal == next and r.seg_t > 0.5:
 		# committed: look one base further, so he can round this base without stopping
 		var nn := next + 1
 		r.keep_going = nn <= 4 and mode != RUN_HOLD and not (nn < 4 and _base_taken(nn, r)) \
-			and _defense_time(base_pos(nn)) > run_t + BASE_DIST / RUN_SPEED + margin
+			and _defense_time(base_pos(nn)) > run_t + BASE_DIST / rs + margin
 		return
 	if r.seg_t <= 0.0 and r.keep_going and mode != RUN_HOLD:
 		r.keep_going = false
@@ -1067,7 +1432,7 @@ func _holder_logic(delta: float) -> void:
 		return
 	h.hold_timer += delta
 	if is_human(h):
-		if h.hold_timer > HOLD_AUTO_TIME and not h.running_to_base:
+		if h.hold_timer > (0.9 if special_play == "steal" else HOLD_AUTO_TIME) and not h.running_to_base:
 			_cpu_fielder_play(h, true)   # no button pressed: he makes the best play himself
 			h.hold_timer = 0.0
 		return
@@ -1141,7 +1506,7 @@ func _throw_to(h, rcv, to: Vector2) -> void:
 		stat("errors")
 		show_message("WILD THROW!", 0.9)
 		return
-	ball.throw_ball(h, rcv, to)
+	ball.throw_ball(h, rcv, to, Ratings.throw_speed_ft(float(h.r["arm"])) * FT)
 
 func _check_outs() -> void:
 	if ball.state != BallScript.HELD or hr_called:
@@ -1177,7 +1542,13 @@ func _runner_out(r, how: String) -> void:
 	if r == batter_runner:
 		batter_runner = null
 	_remove_runner(r)
-	if outs_this_play >= 3:
+	if special_play == "steal":
+		stat("cs")
+		show_message("CAUGHT STEALING!", 1.2)
+	elif special_play == "pickoff":
+		stat("picked_off")
+		show_message("PICKED OFF!", 1.2)
+	elif outs_this_play >= 3:
 		show_message("TRIPLE PLAY!", 1.4)
 	elif outs_this_play == 2:
 		show_message("DOUBLE PLAY!", 1.2)
@@ -1219,6 +1590,21 @@ func _end_play() -> void:
 	phase = PAUSE
 	pause_timer = 1.4
 	after_pause = "batter"
+	if special_play != "":
+		after_pause = special_after
+		pause_timer = 1.0
+		special_play = ""
+		for r in runners:
+			r.forced = false
+			r.retouch = false
+			r.halfway = false
+			r.stealing = false
+			r.goal = r.on_base
+			r.start_base = r.on_base
+		for f in teams[fielding]:
+			f.target = f.home_spot
+			f.running_to_base = false
+		return
 	if batter_runner != null and runners.has(batter_runner) and not error_this_play and not hr_called:
 		hits[batting] += 1
 		stat("hits")
@@ -1257,8 +1643,6 @@ func _on_a_pressed() -> void:
 	if phase == PRE_PITCH and human_pitching():
 		if meter_active:
 			_release_meter()
-		else:
-			_throw_pitch(FASTBALL)
 	elif phase == PITCHING and human_batting():
 		_start_swing(_stick(), false)
 	elif phase == LIVE and human_batting():
@@ -1272,14 +1656,34 @@ func _on_b_pressed() -> void:
 	if phase == PRE_PITCH and human_pitching():
 		if meter_active:
 			_release_meter()
-		else:
-			_throw_pitch(CHANGEUP)
-	elif phase == PITCHING and human_batting():
+	elif phase == PITCHING and human_batting() and not derby:
 		_start_swing(0.0, true)
 	elif phase == LIVE and human_batting():
 		run_mode = RUN_HOLD
 		show_message("HOLD UP!", 0.7)
 		_runner_decisions()
+
+func _on_pitch_pressed(k: int) -> void:
+	if menu_open or phase != PRE_PITCH or not human_pitching() or meter_active:
+		return
+	var m := pitch_menu()
+	if k >= 0 and k < m.size():
+		_throw_pitch(m[k])
+
+func _on_small_pressed(id: String) -> void:
+	if menu_open or phase != PRE_PITCH:
+		return
+	if id == "steal" and human_batting():
+		var c = _steal_candidate()
+		if c != null:
+			steal_on = not steal_on
+			c.steal_intent = steal_on
+			_set_leads()
+			stat("steal_button")
+	elif id.begins_with("pick") and human_pitching() and not meter_active:
+		_pickoff(int(id.substr(4)))
+	elif id == "relief" and human_pitching() and not meter_active and pitcher_idx[fielding] < 2:
+		_change_pitcher()
 
 func _on_base_pressed(b: int) -> void:
 	if menu_open or phase != LIVE or not human_pitching() or ball.state != BallScript.HELD or not is_human(ball.holder):
@@ -1316,12 +1720,17 @@ func _humantest_input() -> Vector2:
 	return Vector2.ZERO
 
 func _humantest_presses() -> void:
+	if phase == PRE_PITCH and human_batting() and _frame % 40 == 0 and _steal_candidate() != null and not steal_on and rng.randf() < 0.3:
+		_on_small_pressed("steal")
 	if phase == PRE_PITCH and human_pitching():
 		if not meter_active and _frame % 50 == 0:
-			if rng.randf() < 0.6:
-				_on_a_pressed()
+			var c = _steal_candidate()
+			if c != null and c.on_base <= 2 and rng.randf() < 0.12:
+				_on_small_pressed("pick%d" % c.on_base)
+			elif pitcher_energy() < RELIEF_AT and pitcher_idx[fielding] < 2 and rng.randf() < 0.5:
+				_on_small_pressed("relief")
 			else:
-				_on_b_pressed()
+				_on_pitch_pressed(rng.randi() % pitch_menu().size())
 		elif meter_active and (absf(meter_pos) < 0.08 or meter_t > 1.8):
 			_on_a_pressed()
 	elif phase == PITCHING and human_batting() and not swung and pitch_clock >= pitch_dur - SWING_DELAY + ht_swing_err:
@@ -1355,7 +1764,11 @@ func _debug_screenshots() -> void:
 		elif phase == PRE_PITCH and meter_active and meter_t > 0.35:
 			m = "pitch_meter"
 		elif phase == PRE_PITCH and human_pitching() and not meter_active and aim.length() > 0.3:
-			m = "pitch_aim"
+			m = "pitch_fan_runners" if not runners.is_empty() else "pitch_fan"
+		elif phase == PITCHING and human_batting() and not runners.is_empty() and runners.any(func(r): return r.stealing):
+			m = "steal"
+		elif phase == LIVE and teams[fielding].any(func(f): return f.dive_t > 0.5):
+			m = "dive"
 		elif phase == LIVE and ball.state == BallScript.HELD and is_human(ball.holder) and ball.holder.hold_timer > 0.2:
 			m = "throw_bases"
 		elif phase == LIVE and ball.state == BallScript.LIVE and ball.can_fly_out and ball.path_bounce - ball.index_now() > 60 and play_timer > 1.0:
@@ -1366,7 +1779,7 @@ func _debug_screenshots() -> void:
 			_moment_shots[m] = true
 			get_viewport().get_texture().get_image().save_png("/tmp/baseball_%s.png" % m)
 			print("MOMENT ", m)
-			if _moment_shots.size() >= 5:
+			if _moment_shots.size() >= 9:
 				get_tree().quit()
 	if OS.get_cmdline_user_args().has("--shots") and _frame % 150 == 0 and _frame > 0:
 		get_viewport().get_texture().get_image().save_png("/tmp/baseball_%04d.png" % _frame)
@@ -1398,8 +1811,13 @@ func _physics_process(delta: float) -> void:
 					aim = (aim + input * 1.8 * delta).clamp(Vector2(-1.6, -1.6), Vector2(1.6, 1.6))
 			else:
 				pre_timer -= delta
-				if pre_timer <= 0.0:
-					_throw_pitch(FASTBALL if rng.randf() < 0.65 else CHANGEUP)
+				if not pickoff_tried and pre_timer < 0.5 and not derby:
+					pickoff_tried = true
+					var c = _steal_candidate()
+					if c != null and rng.randf() < (0.35 if c.steal_intent else 0.04):
+						_pickoff(c.on_base)
+				if phase == PRE_PITCH and pre_timer <= 0.0:
+					_throw_pitch(_cpu_pick_pitch())
 		PITCHING:
 			pitch_clock += delta
 			ball.pitch_t = minf(1.0, pitch_clock / pitch_dur)
@@ -1424,6 +1842,8 @@ func _physics_process(delta: float) -> void:
 						_begin_pitch()
 					"half":
 						_next_half()
+					"derby":
+						_derby_result()
 	if humantest and not game_over:
 		_humantest_presses()
 	ball.update(delta)
@@ -1503,22 +1923,40 @@ func _update_message(delta: float) -> void:
 			msg_label.modulate.a = maxf(0.0, msg_timer / 0.4)
 
 func _update_hud() -> void:
-	score_label.text = "BLUE  %d   -   %d  RED" % [score[0], score[1]]
-	inning_label.text = "%s %d   %s BATTING" % ["TOP" if top else "BOT", inning, TEAM_NAMES[batting]]
-	batter_label.text = "AT BAT: %s #%d" % [TEAM_NAMES[batting], batter.role + 1] if batter != null else ""
+	if derby:
+		score_label.text = "HOME RUNS  %d" % derby_hr
+		inning_label.text = "HOME RUN DERBY"
+		batter_label.text = "OUTS  %d / %d" % [derby_outs, DERBY_OUTS]
+	else:
+		score_label.text = "BLUE  %d   -   %d  RED" % [score[0], score[1]]
+		inning_label.text = "%s %d   %s BATTING" % ["TOP" if top else "BOT", inning, TEAM_NAMES[batting]]
+		batter_label.text = ""
 	var a := "-"
 	var b := "-"
 	var bases := false
+	var pitches := []
+	var small := []
 	if phase == PRE_PITCH or phase == PITCHING:
 		if human_pitching():
 			if phase == PRE_PITCH:
-				a = "STOP" if meter_active else "FAST"
-				b = "STOP" if meter_active else "CHANGE"
+				if meter_active:
+					a = "STOP"
+					b = "STOP"
+				else:
+					for t in pitch_menu():
+						pitches.append(Ratings.PITCH_NAMES[t])
+					for base in [1, 2]:
+						if base_occupied(base):
+							small.append(["pick%d" % base, "PICK\n%dB" % base, false])
+					if pitcher_energy() < RELIEF_AT and pitcher_idx[fielding] < 2:
+						small.append(["relief", "NEW\nARM", true])
 		elif human_batting():
 			a = "SWING"
-			b = "BUNT"
+			b = "-" if derby else "BUNT"
+			if phase == PRE_PITCH and _steal_candidate() != null and not derby:
+				small.append(["steal", "STEAL", steal_on])
 	elif phase == LIVE:
-		if human_batting():
+		if human_batting() and special_play == "":
 			a = "GO!"
 			b = "HOLD"
 		elif ball.state == BallScript.HELD and is_human(ball.holder):
@@ -1527,3 +1965,5 @@ func _update_hud() -> void:
 	controls.a_text = a
 	controls.b_text = b
 	controls.show_bases = bases
+	controls.pitch_names = pitches
+	controls.small = small

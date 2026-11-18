@@ -9,7 +9,10 @@ PLAY IN A BROWSER
 https://kirmalo.github.io/road-trip-baseball/  (works on the tablet's browser too; tap and drag like the app)
 
 HOW TO PLAY
-Pick EASY, NORMAL or HARD at the start (the choice is remembered; you can change it after every game).
+Pick EASY, NORMAL or HARD at the start (the choice is remembered; you can change it after every game), or tap
+HOME RUN DERBY: hit as many homers as you can before 10 outs (any swing that isn't a homer is an out).
+During each at-bat two cards at the bottom show the batter (CON = contact, POW = power, SPD = speed) and the
+pitcher (VEL = velocity, CTL = control, ARM = how much he has left, plus his pitch count).
 You are BLUE, the road team, so you bat first (the top of each inning). RED bats in the bottom.
 The joystick is on the left half of the screen, the buttons on the right. The map in the top-left corner shows
 the whole field: runners (big dots), fielders, the ball, the count and the outs.
@@ -22,17 +25,25 @@ BATTING
   Leave the stick alone for the batter's natural swing.
 - Pitches off the plate are much harder to hit: let them go for balls. Four balls is a walk.
 - BUNT: a soft roller. Easier to make contact, but a foul bunt with two strikes is a strikeout.
+- STEAL (small button, before the pitch, when a runner has an empty base ahead): he takes a big lead and runs on
+  the pitch. Fast runners make it; slow ones get thrown out. A big lead can also get him picked off.
 - Once the ball is in play: GO sends your runners for an extra base, HOLD keeps them where they are.
   Otherwise the runners decide for themselves (green arrow = running, red = going back). With two outs they run
   on anything.
 
 PITCHING
-- Steer the red crosshair where you want the pitch, then tap FAST (fastball) or CHANGE (slower changeup that
-  fools hitters into swinging early). A meter starts sweeping: tap again to stop it in the green and the pitch
-  goes where you aimed; outside the green it can go wild.
+- Steer the red crosshair where you want the pitch, then tap one of your pitcher's pitches: FAST (fastball),
+  CHANGE (slow, drops, fools hitters into swinging early), CURVE (big late drop), SLIDER (late sideways break).
+  Each pitcher throws 2-4 of them. A meter starts sweeping: tap STOP in the green and the pitch goes where you
+  aimed; outside the green it can go wild. Good control means a bigger green zone.
+- Pitchers tire (the ARM bar on his card): slower pitches, a smaller green zone, harder contact. When he is
+  tired a NEW ARM button brings in a reliever (each team has two).
+- PICK 1B / PICK 2B (small buttons, before the pitch): throw over to pick off a runner. Runners who are about to
+  steal take big leads; that's when it works.
 
 FIELDING
 - Fielders run and catch by themselves. A yellow target on the ground shows where a fly ball will come down.
+  Good fielders dive for balls just out of reach, and an outfielder at the wall can rob a home run.
 - When your fielder has the ball, four base buttons appear: tap 1B, 2B, 3B or HOME to throw there. The green
   one is the best play; if you don't tap, he makes that play himself after a moment.
   A fielder who throws to a base he is standing next to just runs over and steps on it.
@@ -52,6 +63,7 @@ _plan_cpu_swing().
 FILES
 - main.gd: rules, count, innings, pitching and hitting, fielding and base running decisions, camera, your controls
 - difficulty.gd: the EASY / NORMAL / HARD values and the saved level
+- ratings.gd: player ratings, the teams' players and pitchers, and what each rating does
 - player.gd: moves a fielder, the batter or a base runner
 - ball.gd: pitches, batted ball flight (bounces, the wall, home runs), throws
 - field.gd: draws the ballpark

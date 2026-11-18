@@ -33,6 +33,21 @@ re-importing it. There is no Git on the tablet, so keep the project self-contain
 - Controls (Phase 1): batting is one tap (timing; stick up/down = loft/chop, `_start_swing`/`_resolve_contact`);
   pitching is aim + pitch button + meter (`_throw_pitch` -> `_release_meter` -> `_deliver_pitch`); fielding is fully
   automatic, your only fielding input is the throw (`_on_base_pressed`, auto `best_play()` after `HOLD_AUTO_TIME`).
+- `scripts/ratings.gd` (Phase 2, static, `Ratings`): contact, power, speed, arm, fielding per player; pitchers
+  (`team_data[t]["staff"]`: starter + 2 relievers) have velocity, control, stamina, `pitches` {type: rating} and a
+  `pitch_count`; `energy()` is fatigue. Teams come from role templates with a fixed per-team seed (Phase 4 crews will
+  replace them). `ORDER` is the batting order. The conversion functions (`run_speed_ft`, `throw_speed_ft`,
+  `contact_mult`, `power_ft`, `react_offset`, `error_mult`) are the one place a rating turns into play.
+- Phase 2 systems in main.gd: pitch types (`BREAK`, `SLOWER`, `MPH_LESS`, `FOOL`, `pitch_menu()`, `pitch_brk`),
+  fatigue and relievers (`pitcher_energy()`, `_change_pitcher()`, `RELIEF_AT`), steals (`steal_intent` ->
+  `_start_steals()` -> runners move during PITCHING -> `_start_special("steal")` the catcher's throw), pickoffs
+  (`_pickoff(b)` -> `_start_special("pickoff")`), `special_play` makes `_end_play()` go back to the same batter;
+  dives (`_dive()`, `DIVE_REACH`, `player.dive_t`), wall catches in `_check_home_run()`, slow motion (`_slowmo()`,
+  off in test runs), Home Run Derby (`derby`, `_start_derby()`, `_derby_result()`, `next_mode` survives the reload
+  from the menu's HOME RUN DERBY button; best score in settings.cfg [derby] best).
+- `touch_controls.gd` also draws the pitch fan (`pitch_names`, signal `pitch_pressed(k)`, same spots as the base
+  buttons) and a column of small buttons (`small` = [id, label, lit]; ids "steal", "pick1", "pick2", "relief";
+  signal `small_pressed(id)`). `hud.gd` draws the batter and pitcher rating cards at the bottom.
 - `assets/`: Kenney Sports Pack sprites (CC0). Player sprites face right (+x).
 - `export_presets.cfg` + `tools/build_web.sh`: web export (no threads, so it runs on plain GitHub Pages).
   `tools/build_web.sh --publish` builds and pushes the result to the `gh-pages` branch.
@@ -58,23 +73,25 @@ godot --headless --path . --fixed-fps 60 --quit-after 80000 -- --autoplay
 godot --headless --path . --fixed-fps 60 --quit-after 100000 -- --humantest
 # screenshots to /tmp/baseball_*.png every 150 frames (needs xvfb)
 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3 --fixed-fps 60 -- --shots --humantest
-# one screenshot per key moment (bat_ring, pitch_aim, pitch_meter, throw_bases, fly_marker, running) to
-# /tmp/baseball_<moment>.png, quits after 5 (software rendering is slow: allow ~10 minutes)
+# one screenshot per key moment (bat_ring, pitch_fan, pitch_fan_runners, pitch_meter, steal, dive, throw_bases,
+# fly_marker, running) to /tmp/baseball_<moment>.png, quits after 9 (software rendering is slow: allow ~20 min)
 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver opengl3 --fixed-fps 60 -- --moments --humantest
 ```
 `--difficulty easy|normal|hard` (or `--difficulty=hard`) sets the level for a test run (default NORMAL).
 `--view flat|angled` (or `--view=flat`) picks the drawing mode (default angled); the simulation is the same in both.
+`--derby` plays a Home Run Derby (with `--humantest`: scripted swings; prints `DERBY <n> home runs`).
 Web build: put Godot 4.3 on PATH as `godot`, install the 4.3 web template (`web_nothreads_release.zip` from the
 export templates .tpz) into `~/.local/share/godot/export_templates/4.3.stable/`, then `tools/build_web.sh`
 (add `--publish` to update the live page). Serve `build/web/` locally to test it in a browser.
 
 After gameplay changes, run about 10 `--autoplay` games and check the stats look sane. Over a 3 inning CPU game,
-typical totals are about 75-80 pitches, 30 balls in play, 15 hits, 8-9 runs (both teams), 3 strikeouts, a few
-doubles, and the odd walk, triple, home run and error. Look at a screenshot after visual changes.
+typical totals are about 75-80 pitches, 30 balls in play, 15 hits, 8-10 runs (both teams), 3-4 strikeouts, 2-3
+doubles, about 2 home runs, 1-2 steal attempts, 2 pickoff throws, 5-6 dives (2 caught), about 1 reliever, and the
+odd walk, triple and error. Look at a screenshot after visual changes.
 
 ## Design
 The owner-approved design and the phase plan are in `docs/VISION.md`. Follow it; record new owner answers there.
 
 ## Ideas not done yet
-Sound effects, stolen bases and pickoffs, diving catches, pitcher fatigue, difficulty setting, curveball, title
-menu, line score at the end, left-handed batters.
+Sound effects, title menu, line score at the end, left-handed batters, stealing home, pickoffs at third,
+named players (Phase 3/4).
