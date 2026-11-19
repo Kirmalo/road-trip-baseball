@@ -48,6 +48,18 @@ re-importing it. There is no Git on the tablet, so keep the project self-contain
 - `touch_controls.gd` also draws the pitch fan (`pitch_names`, signal `pitch_pressed(k)`, same spots as the base
   buttons) and a column of small buttons (`small` = [id, label, lit]; ids "steal", "pick1", "pick2", "relief";
   signal `small_pressed(id)`). `hud.gd` draws the batter and pitcher rating cards at the bottom.
+- `scripts/audio.gd` (Phase 3): sound. `audio.play(name, db, pitch)` effects (a pool of 8), `audio.ump(name)` the
+  umpire / PA (one voice), `audio.organ(name)`, `audio.swell(amount, sec)` raises the crowd murmur loop. Silent in
+  test runs (any user argument). The game's feel lives in main.gd's `_contact_feel()` (bat sound by contact
+  quality, hit-stop `hitstop_left`, `cam_punch`, `cam_shake`, crowd swell, the `exit_text` EXIT VELO readout) and
+  the pitch-result / out / run / homer / catch call sites. A PERFECT swing always gives hard contact (speed floor,
+  launch kept between 3 and 36 degrees). Swings are timed from the real tap time (`_press_clock()`: time since the
+  last physics frame, minus `TOUCH_LATENCY`).
+- `assets/sfx/`: every sound, made by `tools/make_sfx.py` (numpy synthesis; the umpire calls start from
+  espeak-ng, then get pitched down, PA-filtered and echoed). Rerun it and commit the output after changing it; it
+  needs numpy, espeak-ng and ffmpeg. The crowd loop is .ogg (looping is set in code: `.import` files aren't in git).
+- `export_presets.cfg`'s `html/head_include` holds the Hoops audio-unlock script (resumes the browser's AudioContext
+  on the first tap).
 - `assets/`: Kenney Sports Pack sprites (CC0). Player sprites face right (+x).
 - `export_presets.cfg` + `tools/build_web.sh`: web export (no threads, so it runs on plain GitHub Pages).
   `tools/build_web.sh --publish` builds and pushes the result to the `gh-pages` branch.
@@ -93,5 +105,5 @@ odd walk, triple and error. Look at a screenshot after visual changes.
 The owner-approved design and the phase plan are in `docs/VISION.md`. Follow it; record new owner answers there.
 
 ## Ideas not done yet
-Sound effects, title menu, line score at the end, left-handed batters, stealing home, pickoffs at third,
+Music, a sound on/off setting, a latency calibration setting, title menu, line score at the end, left-handed batters, stealing home, pickoffs at third,
 named players (Phase 3/4).

@@ -73,6 +73,15 @@ city, to reach a tournament at a ballpark in the Iowa cornfields. Played by touc
 |---|---|
 | Deep research | Owner asked for deep research on what makes baseball games fun before going deeper; report in `docs/research/what-makes-baseball-games-fun.md`. Owner approved folding its prioritized recommendations into the phase plan (below). Caveat: the research came from search-result summaries, since full pages could not be fetched in that session |
 
+## Phase 3 progress notes
+| Topic | Decision |
+|---|---|
+| Sound source | All sounds synthesized by `tools/make_sfx.py` (like Hoops' swish, bounce and whistle), so no third-party licenses: bat cracks in three qualities, glove and mitt pops, whoosh, crowd loop, cheer, roar, groan, organ stings, and umpire / PA calls voiced with espeak-ng and given a stadium echo. To check with the owner on the tablet: whether the voices and organ are good enough or should be replaced by CC0 / CC-BY recordings |
+| Partisan crowd | The crowd is a home crowd: it cheers RED's runs and groans at BLUE's (fits the road trip, and the research's point that partisan personality is remembered). Home runs, diving catches and robbed homers get a roar either way |
+| PERFECT | Always hard contact (at least about 68 mph plus the batter's power, a line-drive-to-fly launch angle); randomness goes into direction. An EXIT VELO readout shows after every contact |
+| Hit feel | Hit-stop about 5 frames on PERFECT and 2 on good contact, a small camera punch, and a shake on PERFECT and home runs |
+| Touch timing | Swings are timed from the real tap moment, with a fixed 30 ms allowance for touch delay (TOUCH_LATENCY); a calibration setting can come with the settings screen |
+
 ## Phase 2 plan answers
 | Topic | Decision |
 |---|---|

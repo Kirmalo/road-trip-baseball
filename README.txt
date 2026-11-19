@@ -69,5 +69,7 @@ FILES
 - field.gd: draws the ballpark
 - hud.gd: the mini-map, the strike zone panel (timing ring, pitch meter) and hints
 - touch_controls.gd: joystick, buttons and the base buttons
+- audio.gd: sound effects, the crowd and the umpire
 
 Art: Kenney Sports Pack (www.kenney.nl), CC0.
+Sound: made from scratch by tools/make_sfx.py (synthesized; the umpire's voice starts from espeak-ng).

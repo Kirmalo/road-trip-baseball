@@ -19,6 +19,7 @@ const HudScript = preload("res://scripts/hud.gd")
 const Difficulty = preload("res://scripts/difficulty.gd")
 const View = preload("res://scripts/view.gd")
 const Ratings = preload("res://scripts/ratings.gd")
+const AudioScript = preload("res://scripts/audio.gd")
 
 const FT := 4.0                       # pixels per foot
 const INNINGS := 3                    # innings per game (change to make games longer)
@@ -58,7 +59,8 @@ const MPH_LESS := [0, 10, 13, 6]
 const FOOL := [0.0, 0.05, 0.04, 0.02]
 const DIVE_REACH := 9.0 * FT          # a diving fielder can reach this far
 const DERBY_OUTS := 10
-const RELIEF_AT := 0.5                 # you can bring in a reliever once your pitcher's energy drops below this
+const RELIEF_AT := 0.5
+const TOUCH_LATENCY := 0.03            # touch screens report a tap a little late; a swing counts this much earlier                 # you can bring in a reliever once your pitcher's energy drops below this
 
 # fielding spots in feet: P, C, 1B, 2B, SS, 3B, LF, CF, RF
 const POS_NAMES := ["P", "C", "1B", "2B", "SS", "3B", "LF", "CF", "RF"]
@@ -144,6 +146,15 @@ var testing := false
 var menu_open := false
 var menu: Control
 var marker: Node2D
+var audio
+
+# feel: hit-stop, camera punch and shake, the exit-speed readout
+var hitstop_left := 0.0
+var cam_punch := 0.0
+var cam_shake := 0.0
+var exit_text := ""
+var exit_timer := 0.0
+var last_phys_usec := 0
 
 # the ball in play
 var play_timer := 0.0
@@ -187,6 +198,8 @@ func _ready() -> void:
 	level = Difficulty.from_args(args, Difficulty.NORMAL if testing else Difficulty.load_level())
 	View.from_args(args)
 
+	audio = AudioScript.new()
+	add_child(audio)
 	world = Node2D.new()
 	world.scale = Vector2(1.0, View.tilt())
 	world.y_sort_enabled = true          # nearer players (lower on screen) draw in front
@@ -343,10 +356,12 @@ func _open_menu(title: String, sub: String) -> void:
 	controls.get_parent().add_child(menu)
 
 func _on_derby_chosen() -> void:
+	audio.play("tap")
 	next_mode = "derby"
 	get_tree().reload_current_scene()
 
 func _on_level_chosen(k: int) -> void:
+	audio.play("tap")
 	level = k
 	if not testing:
 		Difficulty.save_level(k)
@@ -442,6 +457,8 @@ func _start_half() -> void:
 	ball.hold(_pitcher())
 	_new_batter()
 	show_message("%s OF THE %s\n%s BATTING" % ["TOP" if top else "BOTTOM", _ordinal(inning), TEAM_NAMES[batting]], 1.8)
+	if inning == 1 and top:
+		audio.ump("ump_playball")
 	phase = PAUSE
 	pause_timer = 1.8
 	after_pause = "pitch"
@@ -641,6 +658,8 @@ func _derby_result() -> void:
 		derby_hr += 1
 		stat("hr")
 		show_message("HOME RUN!  %d" % derby_hr, 1.0)
+		audio.play("roar", -3.0)
+		audio.swell(1.0, 2.0)
 	else:
 		derby_outs += 1
 		show_message("OUT  %d / %d" % [derby_outs, DERBY_OUTS], 1.0)
@@ -674,6 +693,7 @@ func _end_half() -> void:
 	if autoplay or humantest:
 		print("End of %s %d: BLUE %d - RED %d" % ["top" if top else "bottom", inning, score[0], score[1]])
 	show_message("3 OUTS\nSIDE RETIRED", 1.8)
+	audio.organ("organ_sting")
 	pause_timer = 1.9
 	after_pause = "half"
 
@@ -788,6 +808,7 @@ func _deliver_pitch(loc: Vector2) -> void:
 	pitch_dur = fb_dur + SLOWER[pitch_type] + rng.randf_range(-0.02, 0.02)
 	pitch_mph = int(84.0 + vel * 0.14 - (1.0 - e) * 5.0) - MPH_LESS[pitch_type] + rng.randi_range(-1, 1)
 	pr["pitch_count"] = int(pr["pitch_count"]) + 1
+	audio.play("whoosh", -12.0, 0.9 + (90.0 - pitch_dur * 90.0) * 0.003)
 	pitch_clock = 0.0
 	ball.start_pitch(MOUND + Vector2(-1.5 * FT, 3.0 * FT), Vector2(pitch_loc.x * 0.8 * FT, -0.8 * FT), (2.5 - pitch_loc.y) * FT)
 	phase = PITCHING
@@ -848,7 +869,13 @@ func _contact_window(bunt: bool) -> float:
 func _perfect_frac() -> float:
 	return Difficulty.value(level, "perfect_frac") if human_batting() else 0.28
 
-func _start_swing(stick: float, bunt: bool) -> void:
+func _press_clock() -> float:
+	# the pitch clock at the moment your finger hit the screen: pitch_clock only moves once a frame, so add the time
+	# since the last frame, and take off the touch screen's reporting delay
+	var since := clampf(float(Time.get_ticks_usec() - last_phys_usec) / 1000000.0, 0.0, 1.0 / 30.0)
+	return pitch_clock + since - (0.0 if humantest else TOUCH_LATENCY)
+
+func _start_swing(stick: float, bunt: bool, at_clock := -1.0) -> void:
 	if swung or phase != PITCHING:
 		return
 	swung = true
@@ -856,13 +883,14 @@ func _start_swing(stick: float, bunt: bool) -> void:
 	if not bunt:
 		batter.swing_t = 0.0
 	stat("swings")
-	var te := pitch_dur - (pitch_clock + SWING_DELAY)     # > 0 early, < 0 late
+	var clk := pitch_clock if at_clock < 0.0 else at_clock
+	var te := pitch_dur - (clk + SWING_DELAY)     # > 0 early, < 0 late
 	var window := _contact_window(bunt)
 	var feel := "EARLY" if te > 0.0 else "LATE"
 	if absf(te) <= window * _perfect_frac():
 		feel = "PERFECT!"
 	if absf(te) <= window:
-		contact_at = pitch_clock + SWING_DELAY
+		contact_at = clk + SWING_DELAY
 		contact_te = te
 		contact_stick = stick
 		contact_bunt = bunt
@@ -889,8 +917,9 @@ func _resolve_contact() -> void:
 		speed += (1.0 - pitcher_energy()) * 6.0   # a tired pitcher gets hit harder
 		launch = 10.0 + rng.randfn(0.0, 15.0) - pitch_loc.y * 6.0 + contact_stick * 18.0
 		if perfect:
-			speed += 4.0
-			launch = lerpf(launch, 18.0 + contact_stick * 12.0, 0.35)
+			# PERFECT always means a hard, well-struck ball: the luck goes into where it goes, not how it's hit
+			speed = maxf(speed + 4.0, 100.0 + Ratings.power_ft(float(batter.r["power"])))
+			launch = clampf(lerpf(launch, 16.0 + contact_stick * 14.0, 0.5), 3.0, 36.0)
 			stat("perfect")
 		spray = -contact_te / window * 62.0 + rng.randf_range(-9.0, 9.0)   # early = pulled to left field
 	var fair := absf(spray) <= 45.0
@@ -900,6 +929,7 @@ func _resolve_contact() -> void:
 		print("contact q=%.2f speed=%d launch=%d spray=%d" % [q, speed, launch, spray])
 	var from: Vector2 = ball.position
 	ball.launch(from, 3.0 * FT, dir * speed * FT * cos(lr), speed * FT * sin(lr), fair, fair)
+	_contact_feel(perfect, q, speed, fair)
 	cam_follow = true
 	cam_last_pos = View.to_screen(Vector2(0, -60 * FT))
 	cam_last_zoom = 0.9
@@ -913,6 +943,7 @@ func _resolve_contact() -> void:
 		return
 	if not fair:
 		stat("fouls")
+		audio.ump("ump_foul", -4.0)
 		phase = PAUSE
 		if contact_bunt and strikes == 2:
 			show_message("FOUL BUNT - STRIKE THREE", 1.3)
@@ -927,6 +958,32 @@ func _resolve_contact() -> void:
 		return
 	second_cover = 4 if spray > 0.0 else 3
 	_start_play()
+
+func _contact_feel(perfect: bool, q: float, speed: float, fair: bool) -> void:
+	# the bigger the contact, the bigger the reaction: sound, a short freeze, a camera punch, the crowd
+	if contact_bunt:
+		audio.play("bat_weak", -6.0, 1.2)
+	elif perfect:
+		audio.play("bat_perfect", 0.0, rng.randf_range(0.97, 1.03))
+		hitstop_left = 0.08
+		cam_punch = 0.07
+		cam_shake = 5.0
+	elif q > 0.45:
+		audio.play("bat_good", -2.0, rng.randf_range(0.95, 1.05))
+		hitstop_left = 0.035
+		cam_punch = 0.03
+	else:
+		audio.play("bat_weak", -3.0)
+	if not fair:
+		audio.play("foul_tick", -4.0)
+	exit_text = "%d MPH" % int(round(speed * 0.682))   # feet per second -> miles per hour
+	exit_timer = 1.8
+	if fair and not contact_bunt:
+		var far: float = ball.path_p[ball.path_p.size() - 1].length() / FT
+		if ball.path_hr >= 0 or far > 230.0:
+			audio.swell(0.85, 2.5)   # the crowd rises with a deep fly
+		elif speed > 90.0:
+			audio.swell(0.4, 1.2)
 
 func _pitch_result() -> void:
 	if derby:
@@ -953,6 +1010,7 @@ func _pitch_count_result() -> void:
 	phase = PAUSE
 	zone_show = 1.2
 	ball.hold(_catcher())
+	audio.play("mitt", -1.0 if _in_zone(pitch_loc) else -5.0)
 	pause_timer = 1.0
 	after_pause = "pitch"
 	if swung or _in_zone(pitch_loc):
@@ -960,16 +1018,22 @@ func _pitch_count_result() -> void:
 		if strikes >= 3:
 			stat("k")
 			show_message("STRIKEOUT!", 1.3)
+			audio.ump("ump_strike3")
+			audio.swell(0.5, 1.5)
 			_batter_out_no_play()
 			return
 		show_message("SWING AND A MISS" if swung else "STRIKE", 0.9)
+		if not swung:
+			audio.ump("ump_strike", -2.0)
 	else:
 		balls += 1
 		stat("balls")
 		if balls >= 4:
+			audio.ump("ump_ball4", -3.0)
 			_walk()
 			return
 		show_message("BALL", 0.9)
+		audio.ump("ump_ball", -7.0)
 
 func _batter_out_no_play() -> void:
 	outs += 1
@@ -1020,6 +1084,12 @@ func _score_runner(r) -> void:
 	r.visible = false
 	if not hr_called:
 		show_message("%s SCORES!" % TEAM_NAMES[batting], 1.0)
+		# a home crowd: it loves RED's runs and groans at the visitors'
+		if batting == 1:
+			audio.play("cheer", -4.0)
+			audio.swell(0.7, 2.0)
+		else:
+			audio.play("groan", -8.0)
 
 # ---------------- the ball in play ----------------
 
@@ -1213,6 +1283,9 @@ func _check_home_run() -> void:
 					f.dive_dir = Vector2.UP
 					ball.hold(f)
 					stat("robbed")
+					audio.play("glove", 0.0)
+					audio.play("roar", -2.0)
+					audio.swell(1.0, 3.0)
 					_slowmo(0.8)
 					_fly_out("ROBBED A HOME RUN!")
 					return
@@ -1221,6 +1294,11 @@ func _check_home_run() -> void:
 	stat("hr")
 	hits[batting] += 1
 	show_message("HOME RUN!", 2.0)
+	audio.play("roar", 0.0)
+	audio.ump("pa_homerun", -2.0)
+	audio.organ("organ_homer", -5.0)
+	audio.swell(1.0, 4.0)
+	cam_shake = 9.0
 	for r in runners:
 		r.trot = true
 		r.forced = false
@@ -1254,6 +1332,7 @@ func _check_catches() -> void:
 		var r = ball.receiver
 		if r != null and ball.throw_t > 0.5 and r.position.distance_to(ball.position) < REACH:
 			ball.hold(r)
+			audio.play("glove", -3.0)
 
 func _dive(f, fly: bool, d: float) -> void:
 	f.dive_t = 0.9
@@ -1265,6 +1344,9 @@ func _dive(f, fly: bool, d: float) -> void:
 	if rng.randf() < p:
 		stat("dive_catch")
 		ball.hold(f)
+		audio.play("glove", 0.0)
+		audio.play("cheer", -2.0)
+		audio.swell(0.9, 2.5)
 		f.hold_timer = -0.5   # he has to get up first
 		_slowmo(0.6)
 		if fly:
@@ -1288,6 +1370,7 @@ func _field_ball(f, fly: bool) -> void:
 		show_message("ERROR!", 0.9)
 		return
 	ball.hold(f)
+	audio.play("glove", -2.0 if fly else -6.0)
 	if fly:
 		_fly_out()
 
@@ -1327,6 +1410,7 @@ func on_runner_reached(r) -> void:
 		r.steal_intent = false
 		stat("sb")
 		show_message("STOLEN BASE!", 1.0)
+		audio.ump("ump_safe", -3.0)
 	if r.on_base >= 4:
 		_score_runner(r)
 		return
@@ -1534,6 +1618,7 @@ func _runner_out(r, how: String) -> void:
 	if OS.get_cmdline_user_args().has("--debug"):
 		print("   out %s by %s" % [how, POS_NAMES[ball.holder.role]])
 	var force_like: bool = how == "force" or r.on_base == 0
+	audio.ump("ump_out", -3.0)
 	outs += 1
 	outs_this_play += 1
 	for q in runners:
@@ -1644,7 +1729,7 @@ func _on_a_pressed() -> void:
 		if meter_active:
 			_release_meter()
 	elif phase == PITCHING and human_batting():
-		_start_swing(_stick(), false)
+		_start_swing(_stick(), false, _press_clock())
 	elif phase == LIVE and human_batting():
 		run_mode = RUN_GO
 		show_message("GO! GO! GO!", 0.7)
@@ -1657,7 +1742,7 @@ func _on_b_pressed() -> void:
 		if meter_active:
 			_release_meter()
 	elif phase == PITCHING and human_batting() and not derby:
-		_start_swing(0.0, true)
+		_start_swing(0.0, true, _press_clock())
 	elif phase == LIVE and human_batting():
 		run_mode = RUN_HOLD
 		show_message("HOLD UP!", 0.7)
@@ -1795,6 +1880,14 @@ func _physics_process(delta: float) -> void:
 		_update_camera(delta)
 		_update_hud()
 		return
+	exit_timer = maxf(0.0, exit_timer - delta)
+	if hitstop_left > 0.0:
+		# hit-stop: the game holds still for a moment on big contact
+		hitstop_left -= delta
+		_update_camera(delta)
+		_update_hud()
+		last_phys_usec = Time.get_ticks_usec()
+		return
 	zone_show = maxf(0.0, zone_show - delta)
 	swing_text_timer = maxf(0.0, swing_text_timer - delta)
 	var input := _input_vector()
@@ -1852,6 +1945,7 @@ func _physics_process(delta: float) -> void:
 			p.update(delta, is_human(p), input)
 	_update_camera(delta)
 	_update_hud()
+	last_phys_usec = Time.get_ticks_usec()
 
 func _update_camera(delta: float) -> void:
 	# at the plate: a close look from behind home at the batter and the mound. In play: pull back to frame the whole
@@ -1891,8 +1985,11 @@ func _update_camera(delta: float) -> void:
 		cam_last_pos = tgt
 		cam_last_zoom = zm
 	camera.position = camera.position.lerp(tgt, 1.0 - exp(-2.6 * delta))
-	var zz := lerpf(camera.zoom.x, zm, 1.0 - exp(-1.8 * delta))
-	camera.zoom = Vector2(zz, zz)
+	var zz := lerpf(camera.zoom.x / (1.0 + cam_punch), zm, 1.0 - exp(-1.8 * delta))
+	cam_punch = maxf(0.0, cam_punch - delta * 0.35)
+	camera.zoom = Vector2(zz, zz) * (1.0 + cam_punch)
+	camera.offset = Vector2(rng.randf_range(-1, 1), rng.randf_range(-1, 1)) * cam_shake
+	cam_shake = maxf(0.0, cam_shake - delta * 18.0)
 
 func _draw_marker() -> void:
 	# where a fly ball will come down

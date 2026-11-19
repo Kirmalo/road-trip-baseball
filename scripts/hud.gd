@@ -22,6 +22,11 @@ func _process(_delta: float) -> void:
 
 func _draw() -> void:
 	_draw_minimap()
+	if game.exit_timer > 0.0 and game.exit_text != "":
+		# how hard it was hit, right under the score bar
+		var font := ThemeDB.fallback_font
+		var a := clampf(game.exit_timer / 0.4, 0.0, 1.0)
+		_text(font, "EXIT VELO  " + game.exit_text, Vector2(size.x / 2, 86), 24, Color(1, 0.92, 0.5, a))
 	if (game.phase == game.PRE_PITCH or game.phase == game.PITCHING) and game.batter != null:
 		_draw_cards()
 	if game.phase == game.PRE_PITCH or game.phase == game.PITCHING or game.zone_show > 0.0 or game.swing_text_timer > 0.0:
