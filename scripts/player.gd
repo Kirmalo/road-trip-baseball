@@ -38,6 +38,7 @@ var run_delay := 0.0
 # batter
 var swing_t := -1.0
 var bunting := false
+var loading := false       # SWING held down: bat cocked back for a power swing
 
 # ratings (ratings.gd) and what they mean here
 var r: Dictionary = {}
@@ -129,7 +130,7 @@ func _runner_update(delta: float) -> void:
 	var b: Vector2 = game.base_pos(on_base + 1)
 	var step: float = run_speed * delta / a.distance_to(b)
 	if goal > on_base:
-		if not (halfway and seg_t >= 0.25):
+		if not (halfway and seg_t >= 0.12):
 			seg_t += step
 		if seg_t >= 1.0:
 			seg_t = 0.0
@@ -158,6 +159,8 @@ func _draw() -> void:
 		draw_arc(Vector2.ZERO, ground_r, 0, TAU, 32, col, 3.0)
 	if game.is_human(self):
 		draw_arc(Vector2.ZERO, 21.0, 0, TAU, 32, Color(1, 0.9, 0.2), 3.5)
+	elif mode == FIELDER and game.phase == game.LIVE and game.ball.state == game.ball.HELD and game.ball.holder == self:
+		draw_arc(Vector2.ZERO, 21.0, 0, TAU, 32, Color(1, 1, 1, 0.9), 3.0)
 	if mode == RUNNER and game.phase == game.LIVE and run_delay <= 0.0:
 		# green arrow: running to the next base. Red: going back
 		var to_b: int = on_base + 1 if goal > on_base else on_base
@@ -189,6 +192,8 @@ func _bat_angle() -> float:
 	# cocked back, swept through the zone on a swing, squared up for a bunt (an angle on the ground)
 	if bunting:
 		return -0.15
+	if loading and swing_t < 0.0:
+		return 2.6
 	if swing_t >= 0.0:
 		return lerpf(2.0, -2.8, minf(1.0, swing_t / 0.24))
 	return 2.0

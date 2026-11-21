@@ -80,6 +80,7 @@ city, to reach a tournament at a ballpark in the Iowa cornfields. Played by touc
 | Partisan crowd | The crowd is a home crowd: it cheers RED's runs and groans at BLUE's (fits the road trip, and the research's point that partisan personality is remembered). Home runs, diving catches and robbed homers get a roar either way |
 | PERFECT | Always hard contact (at least about 68 mph plus the batter's power, a line-drive-to-fly launch angle); randomness goes into direction. An EXIT VELO readout shows after every contact |
 | Hit feel | Hit-stop about 5 frames on PERFECT and 2 on good contact, a small camera punch, and a shake on PERFECT and home runs |
+| Duel and CPU (P5-P9) | Power swing: hold SWING and release (tap = normal swing, unchanged). Missed meter = usually a flat hanging pitch over the middle, else wild; aiming at corners shrinks the green zone. CPU pitches and bats to the count (strikes when behind, chase pitches with two strikes, takes 3-0, sits on the fastball in hitter's counts, protects with two strikes), throws the odd mistake (more when tired, more on Easy), steals only in sensible situations (third only with one out, not into likely walks, not in blowouts). Forced runners take only a few steps on catchable flies. Tap A or B to skip pauses, slow motion and home run trots. The fielder with the ball gets a white ring |
 | Touch timing | Swings are timed from the real tap moment, with a fixed 30 ms allowance for touch delay (TOUCH_LATENCY); a calibration setting can come with the settings screen |
 
 ## Phase 2 plan answers

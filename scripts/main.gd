@@ -41,7 +41,7 @@ const BASE_DIST := 90.0 * FT
 const MOUND := Vector2(0, -60.5 * FT)
 
 const SWING_DELAY := 0.12             # seconds from pressing SWING to the bat reaching the plate
-const CPU_WINDOW := 0.135             # CPU batters: how early or late they can be and still hit it
+const CPU_WINDOW := 0.12              # CPU batters: how early or late they can be and still hit it
 const BUNT_WINDOW := 0.25
 const METER_PERIOD := 1.1             # seconds for the pitch meter to sweep across and back
 const HOLD_AUTO_TIME := 2.5           # your fielder makes the best play by himself after this long
@@ -60,6 +60,8 @@ const FOOL := [0.0, 0.05, 0.04, 0.02]
 const DIVE_REACH := 9.0 * FT          # a diving fielder can reach this far
 const DERBY_OUTS := 10
 const RELIEF_AT := 0.5
+const POWER_HOLD := 0.16               # hold SWING longer than this and let go for a power swing
+const POWER_WINDOW := 0.72             # a power swing's timing window, as a share of the normal one
 const TOUCH_LATENCY := 0.03            # touch screens report a tap a little late; a swing counts this much earlier                 # you can bring in a reliever once your pitcher's energy drops below this
 
 # fielding spots in feet: P, C, 1B, 2B, SS, 3B, LF, CF, RF
@@ -92,6 +94,7 @@ var lineup := [0, 0]
 var team_data := [{}, {}]              # Ratings.make_team(): "players" (by role) and "staff" (starter + 2 relievers)
 var pitcher_idx := [0, 0]              # which of the staff is pitching
 var pitch_brk := Vector2.ZERO           # this pitch's late break (zone units), for the panel
+var pitch_hang := false                # a mistake: a flat pitch hanging over the plate
 
 # steals, pickoffs and other plays that aren't a ball in play
 var special_play := ""                 # "steal" or "pickoff" while one runs as a live play
@@ -133,6 +136,12 @@ var contact_stick := 0.0               # +1 = stick held up (lift it), -1 = down
 var contact_bunt := false
 var cpu_swing_at := -1.0
 var cpu_stick := 0.0
+var cpu_power := false
+var swing_power := false               # this swing is a power swing (narrower window, more carry)
+var contact_power := false
+var a_down_usec := -1                  # SWING held down since (usec), -1 = not held
+var a_down_clock := -1.0               # the pitch clock when it went down (-1 = pressed before the pitch)
+var ht_power := false                  # --humantest: this swing is a scripted power swing
 var zone_show := 0.0
 var meter_active := false              # your pitch meter is sweeping
 var meter_t := 0.0
@@ -281,6 +290,7 @@ func _build_hud() -> void:
 	root.add_child(controls)
 	controls.a_pressed.connect(_on_a_pressed)
 	controls.b_pressed.connect(_on_b_pressed)
+	controls.a_released.connect(_on_a_released)
 	controls.base_pressed.connect(_on_base_pressed)
 	controls.pitch_pressed.connect(_on_pitch_pressed)
 	controls.small_pressed.connect(_on_small_pressed)
@@ -501,6 +511,9 @@ func _begin_pitch() -> void:
 	meter_active = false
 	meter_t = 0.0
 	meter_pos = -1.0
+	swing_power = false
+	contact_power = false
+	batter.loading = false
 	batter.swing_t = -1.0
 	batter.bunting = false
 	batter.position = Vector2(-3.6 * FT, 0)
@@ -531,9 +544,13 @@ func _begin_pitch() -> void:
 		if c != null:
 			var p := clampf((float(c.r["speed"]) - 50.0) / 90.0, 0.0, 0.3)
 			if c.on_base == 2:
-				p *= 0.5
+				p *= 0.5 if outs == 1 else 0.0   # steal third only with one out
 			if outs == 2:
 				p *= 0.7
+			if balls == 3 or (strikes == 2 and balls < 2):
+				p *= 0.3                         # not into a likely walk, nor in a pitcher's count
+			if absf(score[batting] - score[fielding]) >= 4:
+				p = 0.0                          # not with a big lead or a big deficit
 			c.steal_intent = rng.randf() < p
 	_set_leads()
 	ball.hold(_pitcher())
@@ -757,7 +774,12 @@ func _pitch_rating(t: int) -> float:
 
 func _cpu_pick_pitch() -> int:
 	var menu_t := pitch_menu()
-	if rng.randf() < 0.5 or balls == 3:
+	var fb := 0.5
+	if balls > strikes or balls == 3:
+		fb = 0.78   # behind in the count: the fastball he can throw for a strike
+	elif strikes == 2:
+		fb = 0.35   # ahead: his out pitch
+	if rng.randf() < fb:
 		return FASTBALL
 	return menu_t[rng.randi() % menu_t.size()]
 
@@ -765,12 +787,16 @@ func meter_green() -> float:
 	# your pitch meter's green zone: the level, the pitcher's control, and how tired he is
 	var e := pitcher_energy()
 	var c := float(pitcher_r()["control"])
-	return Difficulty.value(level, "meter_green") * (0.75 + c * 0.005) * (0.6 + 0.4 * minf(1.0, e * 2.0))
+	var g: float = Difficulty.value(level, "meter_green") * (0.75 + c * 0.005) * (0.6 + 0.4 * minf(1.0, e * 2.0))
+	# aiming at the edge of the zone is risky: the green zone shrinks as the aim nears a corner
+	var edge := clampf((maxf(absf(aim.x), absf(aim.y)) - 0.55) / 0.45, 0.0, 1.0)
+	return g * (1.0 - 0.4 * edge)
 
 func _throw_pitch(type: int) -> void:
 	if phase != PRE_PITCH or meter_active:
 		return
 	pitch_type = type
+	pitch_hang = false
 	if human_pitching():
 		# start the meter; the pitch goes when you stop it
 		meter_active = true
@@ -790,19 +816,27 @@ func _release_meter() -> void:
 	meter_active = false
 	var off := absf(meter_pos)
 	var green := meter_green()
-	var scatter := 0.05
+	stat("meter_" + ("green" if off <= green else "miss"))
 	if off <= green:
 		show_message("ON TARGET", 0.7)
+		_deliver_pitch(aim + _gauss2(0.05))
+		return
+	var miss := (off - green) / (1.0 - green)
+	if rng.randf() < 0.65:
+		# the usual mistake: it flattens out and hangs over the middle of the plate
+		pitch_hang = true
+		show_message("HANGING...", 0.7)
+		_deliver_pitch(aim.lerp(Vector2(0, -0.25), clampf(0.4 + miss * 0.6, 0.0, 1.0)) + _gauss2(0.08))
 	else:
-		scatter = 0.12 + (off - green) / (1.0 - green) * 0.55
-	stat("meter_" + ("green" if off <= green else "miss"))
-	_deliver_pitch(aim + _gauss2(scatter))
+		_deliver_pitch(aim + _gauss2(0.12 + miss * 0.55))   # or it gets away from him
 
 func _deliver_pitch(loc: Vector2) -> void:
 	var pr := pitcher_r()
 	var e := pitcher_energy()
 	pitch_loc = loc
 	pitch_brk = BREAK[pitch_type] * (_pitch_rating(pitch_type) / 60.0)
+	if pitch_hang:
+		pitch_brk *= 0.3   # a hanger barely breaks
 	var vel := float(pr["velocity"])
 	var fb_dur := lerpf(0.92, 0.76, vel / 100.0) + (1.0 - e) * 0.08
 	pitch_dur = fb_dur + SLOWER[pitch_type] + rng.randf_range(-0.02, 0.02)
@@ -822,11 +856,26 @@ func _deliver_pitch(loc: Vector2) -> void:
 func _cpu_pitch_target(lv: int) -> Vector2:
 	if derby:
 		return Vector2(rng.randf_range(-0.6, 0.6), rng.randf_range(-0.6, 0.6))
+	# the odd mistake: more when he's tired, and more on Easy
+	var mistake := 0.03 + (1.0 - pitcher_energy()) * 0.1 + (0.04 if lv == Difficulty.EASY else 0.0)
+	if rng.randf() < mistake:
+		pitch_hang = true
+		return Vector2(rng.randf_range(-0.35, 0.35), rng.randf_range(-0.6, -0.1))
+	# pitching to the count: behind, he has to throw strikes; ahead with two strikes, he makes you chase
 	var strike_chance := Difficulty.value(lv, "cpu_strikes")
 	if balls == 3:
-		strike_chance = 0.8
+		strike_chance = 0.85 if strikes < 2 else 0.75
+	elif balls > strikes:
+		strike_chance = maxf(strike_chance, 0.68)
+	elif strikes == 2:
+		strike_chance = 0.32
 	if rng.randf() < strike_chance:
 		return Vector2(rng.randf_range(-0.85, 0.85), rng.randf_range(-0.85, 0.85))
+	if strikes == 2:
+		# a chase pitch just off the plate, usually low or away
+		var low := rng.randf() < 0.6
+		return Vector2(rng.randf_range(-0.9, 0.9), rng.randf_range(1.05, 1.4)) if low \
+			else Vector2(rng.randf_range(1.05, 1.4) * (1.0 if rng.randf() < 0.5 else -1.0), rng.randf_range(-0.8, 0.8))
 	return Vector2(rng.randf_range(-1.45, 1.45), rng.randf_range(-1.45, 1.45))
 
 func _plan_cpu_swing() -> void:
@@ -836,21 +885,34 @@ func _plan_cpu_swing() -> void:
 		p = Difficulty.value(lv, "cpu_zone_swing")
 	elif absf(pitch_loc.x) < 1.35 and absf(pitch_loc.y) < 1.35:
 		p = Difficulty.value(lv, "cpu_chase") * (1.0 + _pitch_rating(pitch_type) / 200.0 if pitch_type != FASTBALL else 1.0)
+	var hitters_count := balls >= 2 and balls > strikes
 	if strikes == 2:
-		p += 0.15
+		p += 0.15            # protect the plate
+	if balls == 3 and strikes == 0:
+		p *= 0.2             # 3-0: take
+	if pitch_hang:
+		p = maxf(p, 0.85)    # a hanger: everybody swings
 	if rng.randf() >= p:
 		return
 	var con := float(batter.r["contact"])
-	var te := rng.randfn(0.0, Difficulty.value(lv, "cpu_timing_sd") * (1.2 - con * 0.004))
-	te += FOOL[pitch_type] * (_pitch_rating(pitch_type) / 60.0) * minf(1.0, pitcher_energy() * 2.0)   # fooled: out in front
+	var sd: float = Difficulty.value(lv, "cpu_timing_sd") * (1.2 - con * 0.004)
+	if pitch_hang or (hitters_count and pitch_type == FASTBALL):
+		sd *= 0.85           # sitting on it
+	var te := rng.randfn(0.0, sd)
+	if not pitch_hang:
+		te += FOOL[pitch_type] * (_pitch_rating(pitch_type) / 60.0) * minf(1.0, pitcher_energy() * 2.0)   # fooled: out in front
 	cpu_swing_at = maxf(0.05, pitch_dur - SWING_DELAY - te)
 	cpu_stick = 0.0
-	var roll := rng.randf()
+	cpu_power = false
 	var pw := float(batter.r["power"])
-	if roll < 0.06 + pw * 0.0015:
+	if strikes == 2:
+		return               # two strikes: a short, level swing
+	var roll := rng.randf()
+	if roll < 0.06 + pw * 0.0015 + (0.15 if hitters_count else 0.0):
 		cpu_stick = 1.0      # power hitters try to lift it
 	elif roll < 0.2 + pw * 0.0015:
 		cpu_stick = -1.0
+	cpu_power = hitters_count and pw > 58.0 and rng.randf() < 0.5
 
 func _contact_window(bunt: bool) -> float:
 	# how early or late the swing may be and still hit it; pitches off the plate are harder to hit
@@ -861,6 +923,8 @@ func _contact_window(bunt: bool) -> float:
 		w = Difficulty.value(level, "swing_window")
 	if not bunt and batter != null and not batter.r.is_empty():
 		w *= Ratings.contact_mult(float(batter.r["contact"]))
+	if not bunt and swing_power:
+		w *= POWER_WINDOW
 	var d := maxf(absf(pitch_loc.x), absf(pitch_loc.y))
 	if d > 1.0:
 		w *= clampf(1.0 - (d - 1.0) * 1.1, 0.25, 1.0)
@@ -875,10 +939,14 @@ func _press_clock() -> float:
 	var since := clampf(float(Time.get_ticks_usec() - last_phys_usec) / 1000000.0, 0.0, 1.0 / 30.0)
 	return pitch_clock + since - (0.0 if humantest else TOUCH_LATENCY)
 
-func _start_swing(stick: float, bunt: bool, at_clock := -1.0) -> void:
+func _start_swing(stick: float, bunt: bool, at_clock := -1.0, power := false) -> void:
 	if swung or phase != PITCHING:
 		return
 	swung = true
+	swing_power = power and not bunt
+	batter.loading = false
+	if swing_power:
+		stat("power_swings")
 	batter.bunting = bunt
 	if not bunt:
 		batter.swing_t = 0.0
@@ -894,8 +962,11 @@ func _start_swing(stick: float, bunt: bool, at_clock := -1.0) -> void:
 		contact_te = te
 		contact_stick = stick
 		contact_bunt = bunt
+		contact_power = swing_power
 	elif feel != "PERFECT!":
 		feel = "WAY " + feel
+	if swing_power:
+		feel = "POWER " + feel
 	if human_batting():
 		swing_text = "BUNT" if bunt and contact_at >= 0.0 else feel
 		swing_text_timer = 1.1
@@ -915,6 +986,11 @@ func _resolve_contact() -> void:
 		speed = (54.0 + 64.0 * q) * (1.0 if _in_zone(pitch_loc) else 0.85) + rng.randf_range(-6.0, 6.0)
 		speed += Ratings.power_ft(float(batter.r["power"])) - (_pitch_rating(pitch_type) - 50.0) * 0.08
 		speed += (1.0 - pitcher_energy()) * 6.0   # a tired pitcher gets hit harder
+		if pitch_hang:
+			speed += 4.0                          # and a hanger gets hit hardest
+		if contact_power:
+			speed += 9.0
+			launch += 4.0
 		launch = 10.0 + rng.randfn(0.0, 15.0) - pitch_loc.y * 6.0 + contact_stick * 18.0
 		if perfect:
 			# PERFECT always means a hard, well-struck ball: the luck goes into where it goes, not how it's hit
@@ -1475,7 +1551,7 @@ func _decide_runner(r, in_air: bool) -> void:
 		return
 	if r.forced:
 		r.goal = r.on_base + 1
-		r.halfway = in_air and r != batter_runner
+		r.halfway = in_air and r != batter_runner   # a few steps off the bag, ready to get back
 		return
 	var next: int = r.on_base + 1
 	if in_air:
@@ -1725,18 +1801,64 @@ func _stick() -> float:
 func _on_a_pressed() -> void:
 	if menu_open or game_over:
 		return
+	if _try_skip():
+		return
 	if phase == PRE_PITCH and human_pitching():
 		if meter_active:
 			_release_meter()
-	elif phase == PITCHING and human_batting():
-		_start_swing(_stick(), false, _press_clock())
+	elif (phase == PITCHING or phase == PRE_PITCH) and human_batting() and not swung and a_down_usec < 0:
+		# SWING down: a quick tap swings at this moment; holding it loads a power swing for when you let go
+		a_down_usec = Time.get_ticks_usec()
+		a_down_clock = _press_clock() if phase == PITCHING else -1.0
+		batter.loading = true
 	elif phase == LIVE and human_batting():
 		run_mode = RUN_GO
 		show_message("GO! GO! GO!", 0.7)
 		_runner_decisions()
 
+func _tap_pending() -> bool:
+	# SWING is down but not yet long enough to be a power swing: wait for the release before calling the pitch
+	return a_down_usec >= 0 and a_down_clock >= 0.0 and float(Time.get_ticks_usec() - a_down_usec) / 1000000.0 < POWER_HOLD
+
+func _on_a_released() -> void:
+	if a_down_usec < 0:
+		return
+	var held := float(Time.get_ticks_usec() - a_down_usec) / 1000000.0
+	var press_clock := a_down_clock
+	a_down_usec = -1
+	a_down_clock = -1.0
+	batter.loading = false
+	if phase != PITCHING or not human_batting() or swung:
+		return
+	if held < POWER_HOLD and press_clock >= 0.0:
+		_start_swing(_stick(), false, press_clock)            # a tap: timed when your finger hit the screen
+	elif held >= POWER_HOLD:
+		_start_swing(_stick(), false, _press_clock(), true)   # a power swing: timed when you let go
+
+func _try_skip() -> bool:
+	# tap to hurry along: the pause after a play, slow motion, a home run trot
+	if phase == PAUSE and pause_timer > 0.25 and after_pause != "":
+		pause_timer = 0.25
+		_end_slowmo()
+		return true
+	if phase == LIVE and hr_called and not runners.is_empty():
+		for r in runners.duplicate():
+			_score_runner(r)
+		_end_slowmo()
+		return true
+	if slowmo_left > 0.0:
+		_end_slowmo()
+		return true
+	return false
+
+func _end_slowmo() -> void:
+	slowmo_left = 0.0
+	Engine.time_scale = 1.0
+
 func _on_b_pressed() -> void:
 	if menu_open or game_over:
+		return
+	if _try_skip():
 		return
 	if phase == PRE_PITCH and human_pitching():
 		if meter_active:
@@ -1777,6 +1899,8 @@ func _on_base_pressed(b: int) -> void:
 	_play_on_base(ball.holder, b)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and not event.pressed and (event.keycode == KEY_J or event.keycode == KEY_SPACE):
+		_on_a_released()
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_J or event.keycode == KEY_SPACE:
 			_on_a_pressed()
@@ -1804,6 +1928,18 @@ func _humantest_input() -> Vector2:
 		return [Vector2.ZERO, Vector2.UP, Vector2.DOWN][_frame / 400 % 3]
 	return Vector2.ZERO
 
+func ht_power_try() -> bool:
+	# decided once per pitch: about one swing in four is a scripted power swing
+	if pitch_clock < 0.05:
+		ht_power = _in_zone(pitch_loc) and rng.randf() < 0.25
+	return ht_power
+
+func _ht_release_after(_sec: float) -> void:
+	# the scripted thumb lets go now; a power swing must look held, so backdate its press
+	if ht_power:
+		a_down_usec = Time.get_ticks_usec() - int(POWER_HOLD * 2.0 * 1000000.0)
+	_on_a_released()
+
 func _humantest_presses() -> void:
 	if phase == PRE_PITCH and human_batting() and _frame % 40 == 0 and _steal_candidate() != null and not steal_on and rng.randf() < 0.3:
 		_on_small_pressed("steal")
@@ -1818,12 +1954,20 @@ func _humantest_presses() -> void:
 				_on_pitch_pressed(rng.randi() % pitch_menu().size())
 		elif meter_active and (absf(meter_pos) < 0.08 or meter_t > 1.8):
 			_on_a_pressed()
-	elif phase == PITCHING and human_batting() and not swung and pitch_clock >= pitch_dur - SWING_DELAY + ht_swing_err:
+	elif phase == PITCHING and human_batting() and not swung and a_down_usec < 0 and ht_power_try() \
+			and pitch_clock >= pitch_dur - SWING_DELAY - 0.35:
+		_on_a_pressed()   # load a power swing
+	elif phase == PITCHING and human_batting() and not swung and a_down_usec >= 0 and ht_power \
+			and pitch_clock >= pitch_dur - SWING_DELAY + ht_swing_err:
+		_ht_release_after(0.0)
+	elif phase == PITCHING and human_batting() and not swung and a_down_usec < 0 and not ht_power \
+			and pitch_clock >= pitch_dur - SWING_DELAY + ht_swing_err:
 		if _in_zone(pitch_loc) or rng.randf() < 0.03:
 			if rng.randf() < 0.08:
 				_on_b_pressed()
 			else:
 				_on_a_pressed()
+				_ht_release_after(0.0)
 	elif phase == LIVE:
 		if human_pitching() and ball.state == BallScript.HELD and is_human(ball.holder) and ball.holder.hold_timer > 0.5:
 			var b := best_play(ball.holder, true)
@@ -1916,11 +2060,11 @@ func _physics_process(delta: float) -> void:
 			ball.pitch_t = minf(1.0, pitch_clock / pitch_dur)
 			if cpu_swing_at >= 0.0 and pitch_clock >= cpu_swing_at:
 				cpu_swing_at = -1.0
-				_start_swing(cpu_stick, false)
+				_start_swing(cpu_stick, false, -1.0, cpu_power)
 			if contact_at >= 0.0 and pitch_clock >= contact_at:
 				contact_at = -1.0
 				_resolve_contact()
-			elif contact_at < 0.0 and pitch_clock >= pitch_dur:
+			elif contact_at < 0.0 and pitch_clock >= pitch_dur and not _tap_pending():
 				_pitch_result()
 		LIVE:
 			_live_update(delta)

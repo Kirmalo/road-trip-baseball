@@ -23,6 +23,11 @@ BATTING
   Early pulls the ball to left field (too early = foul), late pushes it to right field.
 - Hold the stick UP while you swing to lift the ball (fly balls, home runs), DOWN to chop it on the ground.
   Leave the stick alone for the batter's natural swing.
+- POWER SWING: hold SWING down early and let go at the right moment instead of tapping. The timing window is
+  narrower, but a good one goes a lot farther. A quick tap is always the normal swing.
+- Watch for hanging pitches: a pitch that sits flat over the middle (pitchers make mistakes, more when tired).
+- The CPU pitches to the count: behind in the count he has to throw strikes; with two strikes he tries to make
+  you chase something just off the plate.
 - Pitches off the plate are much harder to hit: let them go for balls. Four balls is a walk.
 - BUNT: a soft roller. Easier to make contact, but a foul bunt with two strikes is a strikeout.
 - STEAL (small button, before the pitch, when a runner has an empty base ahead): he takes a big lead and runs on
@@ -35,7 +40,8 @@ PITCHING
 - Steer the red crosshair where you want the pitch, then tap one of your pitcher's pitches: FAST (fastball),
   CHANGE (slow, drops, fools hitters into swinging early), CURVE (big late drop), SLIDER (late sideways break).
   Each pitcher throws 2-4 of them. A meter starts sweeping: tap STOP in the green and the pitch goes where you
-  aimed; outside the green it can go wild. Good control means a bigger green zone.
+  aimed; outside the green it usually HANGS over the middle of the plate (and gets hit hard), or sails wild.
+  Good control means a bigger green zone; aiming at a corner makes it smaller (risk and reward).
 - Pitchers tire (the ARM bar on his card): slower pitches, a smaller green zone, harder contact. When he is
   tired a NEW ARM button brings in a reliever (each team has two).
 - PICK 1B / PICK 2B (small buttons, before the pitch): throw over to pick off a runner. Runners who are about to
@@ -48,6 +54,8 @@ FIELDING
   one is the best play; if you don't tap, he makes that play himself after a moment.
   A fielder who throws to a base he is standing next to just runs over and steps on it.
 - Fly balls caught before they bounce are outs, and runners have to go back to their base.
+
+Tap a button during a pause, a slow-motion replay or a home run trot to skip ahead.
 
 RULES
 3 innings, 3 outs, 4 balls a walk, 3 strikes an out (fouls count as strikes until two). Extra innings if tied.

@@ -55,6 +55,13 @@ re-importing it. There is no Git on the tablet, so keep the project self-contain
   the pitch-result / out / run / homer / catch call sites. A PERFECT swing always gives hard contact (speed floor,
   launch kept between 3 and 36 degrees). Swings are timed from the real tap time (`_press_clock()`: time since the
   last physics frame, minus `TOUCH_LATENCY`).
+- The duel (research P5-P9): SWING down starts `a_down_usec`; `_on_a_released()` makes it a tap swing (timed at the
+  press) or, held past `POWER_HOLD`, a power swing (timed at the release, `POWER_WINDOW`, more carry);
+  `_tap_pending()` keeps the pitch from being called while a tap is undecided. `pitch_hang` is a mistake pitch
+  (your missed meter, or the CPU's odd mistake): flat, over the middle, hit harder. The CPU pitches and bats to the
+  count (`_cpu_pitch_target`, `_cpu_pick_pitch`, `_plan_cpu_swing`), steals only in sensible situations, and
+  `meter_green()` shrinks toward the corners. `_try_skip()`: A or B during a pause, slow motion or a home run trot
+  skips ahead. The fielder holding the ball has a white ring.
 - `assets/sfx/`: every sound, made by `tools/make_sfx.py` (numpy synthesis; the umpire calls start from
   espeak-ng, then get pitched down, PA-filtered and echoed). Rerun it and commit the output after changing it; it
   needs numpy, espeak-ng and ffmpeg. The crowd loop is .ogg (looping is set in code: `.import` files aren't in git).
